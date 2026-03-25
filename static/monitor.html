@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>blind_glasses 監控面板</title>
+  <style>
+    body { font-family: "Microsoft JhengHei", sans-serif; background:#111; color:#eee; margin:0; padding:16px; }
+    .grid { display:grid; grid-template-columns: 2fr 1fr; gap:16px; }
+    .card { background:#1c1c1c; border:1px solid #333; border-radius:8px; padding:12px; }
+    h1 { margin:0 0 12px 0; font-size:20px; }
+    h2 { margin:0 0 8px 0; font-size:16px; }
+    img { width:100%; border-radius:6px; background:#000; min-height:240px; object-fit:contain; }
+    .kv { line-height:1.6; font-size:14px; }
+    ul { margin:6px 0 0 18px; padding:0; font-size:13px; }
+    code { color:#7ee787; }
+  </style>
+</head>
+<body>
+  <h1>blind_glasses 監控面板</h1>
+  <div class="grid">
+    <div class="card">
+      <h2>即時畫面</h2>
+      <img id="frame" src="/api/monitor/frame" alt="frame" />
+    </div>
+    <div class="card">
+      <h2>目前狀態</h2>
+      <div class="kv" id="state"></div>
+      <h2 style="margin-top:12px;">最近語音</h2>
+      <ul id="voice"></ul>
+      <h2 style="margin-top:12px;">最近事件</h2>
+      <ul id="events"></ul>
+    </div>
+  </div>
+
+  <script>
+    const frameEl = document.getElementById("frame");
+    const stateEl = document.getElementById("state");
+    const voiceEl = document.getElementById("voice");
+    const eventsEl = document.getElementById("events");
+
+    function fmtStep(step) {
+      if (!step) return "無";
+      return `${step.instruction} (${step.distance_m || 0}m) [${(step.index || 0) + 1}/${step.total || 0}]`;
+    }
+
+    async function pollState() {
+      try {
+        const res = await fetch("/api/monitor/state", { cache: "no-store" });
+        const data = await res.json();
+        const nav = data.navigation || {};
+        const fusion = data.fusion || {};
+        const tl = data.traffic_light || {};
+
+        stateEl.innerHTML = [
+          `模式: <code>${data.mode || "-"}</code>`,
+          `最近 TTS: <code>${nav.last_tts || "-"}</code>`,
+          `下一步: <code>${fmtStep(nav.next_step)}</code>`,
+          `Heading: <code>${fusion.heading_deg ?? "-"}</code>`,
+          `Turning: <code>${fusion.turning || "-"}</code>`,
+          `Confidence: <code>${fusion.confidence ?? "-"}</code>`,
+          `Traffic: <code>${tl.state || "-"}</code> / <code>${tl.last_color || "-"}</code>`,
+        ].join("<br>");
+
+        voiceEl.innerHTML = "";
+        (data.recent_voice || []).slice().reverse().forEach(v => {
+          const li = document.createElement("li");
+          li.textContent = v.text || "-";
+          voiceEl.appendChild(li);
+        });
+      } catch (_) {}
+    }
+
+    async function pollEvents() {
+      try {
+        const res = await fetch("/api/monitor/events?limit=8", { cache: "no-store" });
+        const data = await res.json();
+        eventsEl.innerHTML = "";
+        (data.events || []).slice().reverse().forEach(ev => {
+          const li = document.createElement("li");
+          li.textContent = `${ev.type}: ${JSON.stringify(ev.payload || {})}`;
+          eventsEl.appendChild(li);
+        });
+      } catch (_) {}
+    }
+
+    function refreshFrame() {
+      frameEl.src = "/api/monitor/frame?t=" + Date.now();
+    }
+
+    setInterval(refreshFrame, 500);
+    setInterval(pollState, 500);
+    setInterval(pollEvents, 1000);
+    refreshFrame();
+    pollState();
+    pollEvents();
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+data/
+.env
+line_bot.py
+models/
+*.onnx
+*.log
