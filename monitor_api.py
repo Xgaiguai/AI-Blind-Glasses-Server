@@ -15,6 +15,7 @@ def create_monitor_router(
     get_state_fn: Callable[[], Dict[str, Any]],
     get_events_fn: Callable[[int], List[Dict[str, Any]]],
     get_frame_fn: Callable[[], Optional[bytes]],
+    get_health_fn: Optional[Callable[[], Dict[str, Any]]] = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -31,8 +32,15 @@ def create_monitor_router(
     async def monitor_frame():
         frame = get_frame_fn()
         if not frame:
-            return JSONResponse({"error": "no_frame"}, status_code=404)
+            # 無串流幀：用 204 表示「暫無內容」，避免監控頁每秒輪詢刷 404 日誌
+            return Response(status_code=204)
         return Response(content=frame, media_type="image/jpeg")
+
+    @router.get("/api/monitor/health")
+    async def monitor_health() -> Dict[str, Any]:
+        if get_health_fn is not None:
+            return get_health_fn()
+        return {"status": "ok"}
 
     return router
 

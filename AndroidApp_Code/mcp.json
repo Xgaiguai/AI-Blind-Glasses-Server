@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "github-server": {
+      "command": "npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "請在這裡填入您的_GITHUB_TOKEN"
+      }
+    },
+    "sqlite-server": {
+      "command": "npx.cmd",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite",
+        "--db-path",
+        "d:/API server/server4/database.sqlite"
+      ]
+    }
+  }
+}

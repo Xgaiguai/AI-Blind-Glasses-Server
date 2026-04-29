@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Blind Glasses 專案搬移指令面板</title>
+  <style>
+    body {
+      font-family: "Segoe UI", "Noto Sans TC", sans-serif;
+      margin: 24px;
+      background: #0b1020;
+      color: #e8ecff;
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    p { margin: 0 0 16px; color: #b9c1e6; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 14px;
+    }
+    .card {
+      background: #141b34;
+      border: 1px solid #29325e;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .tag {
+      display: inline-block;
+      font-size: 12px;
+      color: #88a0ff;
+      border: 1px solid #40519f;
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-bottom: 8px;
+    }
+    .title { font-size: 16px; margin: 0 0 8px; }
+    .desc { font-size: 14px; color: #b9c1e6; margin: 0 0 10px; }
+    pre {
+      margin: 0 0 10px;
+      background: #0b1129;
+      border: 1px solid #29325e;
+      border-radius: 8px;
+      padding: 10px;
+      overflow-x: auto;
+      color: #d9e7ff;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    button {
+      background: #3f5fff;
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:active { transform: translateY(1px); }
+    .ok {
+      margin-left: 8px;
+      color: #8df0a9;
+      font-size: 13px;
+      visibility: hidden;
+    }
+  </style>
+</head>
+<body>
+  <h1>專案搬移指令面板（PowerShell）</h1>
+  <p>給「整個專案搬到新電腦/新環境」使用。請照 Step 1 → Step 10 順序執行。</p>
+
+  <div class="grid">
+    <div class="card">
+      <span class="tag">Step 1</span>
+      <h2 class="title">設定專案路徑（可搬移）</h2>
+      <p class="desc">先設定專案根目錄變數，後面所有指令都可重複使用。</p>
+      <pre id="cmd1">$ROOT = "C:\path\to\blind_glasses"
+Set-Location $ROOT</pre>
+      <button onclick="copyCmd('cmd1', 'ok1')">複製指令</button><span id="ok1" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 2</span>
+      <h2 class="title">檢查必要工具</h2>
+      <p class="desc">確認 Python / pip / ngrok 可用；沒有就先安裝。</p>
+      <pre id="cmd2">python --version
+pip --version
+ngrok version</pre>
+      <button onclick="copyCmd('cmd2', 'ok2')">複製指令</button><span id="ok2" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 3</span>
+      <h2 class="title">建立與啟用 Python 虛擬環境</h2>
+      <p class="desc">在新環境建議固定使用 venv，避免套件衝突。</p>
+      <pre id="cmd3">Set-Location "$ROOT\server"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1</pre>
+      <button onclick="copyCmd('cmd3', 'ok3')">複製指令</button><span id="ok3" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 4</span>
+      <h2 class="title">安裝 server 相依套件</h2>
+      <p class="desc">先找 requirements，再 fallback 手動安裝常用套件。</p>
+      <pre id="cmd4">Set-Location "$ROOT\server"
+if (Test-Path .\requirements.txt) {
+  pip install -r .\requirements.txt
+} else {
+  pip install fastapi uvicorn requests python-dotenv
+}</pre>
+      <button onclick="copyCmd('cmd4', 'ok4')">複製指令</button><span id="ok4" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 5</span>
+      <h2 class="title">設定 ngrok token（新環境只需一次）</h2>
+      <p class="desc">第一次在新機器使用 ngrok 時要先設定。</p>
+      <pre id="cmd5">ngrok config add-authtoken &lt;YOUR_TOKEN&gt;</pre>
+      <button onclick="copyCmd('cmd5', 'ok5')">複製指令</button><span id="ok5" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 6</span>
+      <h2 class="title">啟動 FastAPI Server（視窗 A）</h2>
+      <p class="desc">此視窗保持開啟，提供 API。</p>
+      <pre id="cmd6">Set-Location "$ROOT\server"
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn main:app --host 0.0.0.0 --port 5000</pre>
+      <button onclick="copyCmd('cmd6', 'ok6')">複製指令</button><span id="ok6" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 7</span>
+      <h2 class="title">啟動 ngrok（視窗 B）</h2>
+      <p class="desc">另外開一個 PowerShell 視窗執行並保持在線。</p>
+      <pre id="cmd7">Set-Location $ROOT
+ngrok http 5000</pre>
+      <button onclick="copyCmd('cmd7', 'ok7')">複製指令</button><span id="ok7" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 8</span>
+      <h2 class="title">抓 ngrok 公開網址（視窗 C）</h2>
+      <p class="desc">從本機 ngrok API 讀取 `Public URL` 與 Health URL。</p>
+      <pre id="cmd8">$t = (Invoke-RestMethod -UseBasicParsing 'http://127.0.0.1:4040/api/tunnels' -TimeoutSec 5).tunnels
+$u = ($t | Where-Object { $_.public_url -like 'https://*' } | Select-Object -First 1).public_url
+if (-not $u) { $u = ($t | Select-Object -First 1).public_url }
+"Public URL: $u"
+"Health URL: $u/health"</pre>
+      <button onclick="copyCmd('cmd8', 'ok8')">複製指令</button><span id="ok8" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 9</span>
+      <h2 class="title">驗證健康檢查</h2>
+      <p class="desc">把下面網址中的 `xxxxx` 換成你剛抓到的 ngrok 子網域。</p>
+      <pre id="cmd9">start https://xxxxx.ngrok-free.app/health</pre>
+      <button onclick="copyCmd('cmd9', 'ok9')">複製指令</button><span id="ok9" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Step 10</span>
+      <h2 class="title">Firmware 端燒錄與監看（可選）</h2>
+      <p class="desc">若同時搬移 firmware 環境，可直接跑這組。</p>
+      <pre id="cmd10">Set-Location "$ROOT\firmware"
+pio run -t upload
+pio device monitor -b 115200</pre>
+      <button onclick="copyCmd('cmd10', 'ok10')">複製指令</button><span id="ok10" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">Troubleshoot</span>
+      <h2 class="title">常見問題快速修復</h2>
+      <p class="desc">啟動失敗時可先跑以下命令再重試 Step 6。</p>
+      <pre id="cmd11">Set-Location "$ROOT\server"
+.\.venv\Scripts\Activate.ps1
+pip install --upgrade pip
+pip install -r .\requirements.txt
+python -m uvicorn main:app --host 0.0.0.0 --port 5000 --reload</pre>
+      <button onclick="copyCmd('cmd11', 'ok11')">複製指令</button><span id="ok11" class="ok">已複製</span>
+    </div>
+
+    <div class="card">
+      <span class="tag">All-in-One</span>
+      <h2 class="title">新環境一鍵初始化（分兩個視窗）</h2>
+      <p class="desc">先在視窗 A 執行 server 初始化與啟動，再在視窗 B 執行 ngrok；最後可在任一視窗貼 health 檢查。</p>
+      <pre id="cmd12"># 視窗 A：Server 初始化 + 啟動
+$ROOT = "C:\path\to\blind_glasses"
+Set-Location "$ROOT\server"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+if (Test-Path .\requirements.txt) {
+  pip install -r .\requirements.txt
+} else {
+  pip install fastapi uvicorn requests python-dotenv
+}
+python -m uvicorn main:app --host 0.0.0.0 --port 5000
+
+# 視窗 B：ngrok
+$ROOT = "C:\path\to\blind_glasses"
+Set-Location $ROOT
+ngrok http 5000
+
+# 任一視窗：抓公開網址 + health
+$t = (Invoke-RestMethod -UseBasicParsing 'http://127.0.0.1:4040/api/tunnels' -TimeoutSec 5).tunnels
+$u = ($t | Where-Object { $_.public_url -like 'https://*' } | Select-Object -First 1).public_url
+if (-not $u) { $u = ($t | Select-Object -First 1).public_url }
+"Public URL: $u"
+"Health URL: $u/health"</pre>
+      <button onclick="copyCmd('cmd12', 'ok12')">複製指令</button><span id="ok12" class="ok">已複製</span>
+    </div>
+  </div>
+
+  <script>
+    async function copyCmd(preId, okId) {
+      const text = document.getElementById(preId).innerText;
+      const ok = document.getElementById(okId);
+      try {
+        await navigator.clipboard.writeText(text);
+        ok.style.visibility = "visible";
+        setTimeout(() => ok.style.visibility = "hidden", 1200);
+      } catch (e) {
+        alert("複製失敗，請手動複製。");
+      }
+    }
+  </script>
+</body>
+</html>
+

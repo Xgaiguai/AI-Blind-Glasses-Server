@@ -3,6 +3,7 @@ python-dotenv>=1.0.0
 uvicorn[standard]>=0.27.0
 requests>=2.31.0
 pydantic>=2.0.0
+line-bot-sdk>=2.4.2
 
 # 任務 2
 numpy>=1.24.0
@@ -14,8 +15,13 @@ google-generativeai>=0.3.0
 edge-tts>=6.1.0
 Pillow>=10.0.0
 
+# 任務 物品查找（YOLOE + MediaPipe）所需（若模型未啟用，仍可回退 Gemini）
+mediapipe
+ultralytics
+torch
+
+# ASR（台灣版）：本地 faster-whisper（CPU）
+faster-whisper
+
 # 舊版相容（可選）
 gtts>=2.5.0
-
-# Line Bot
-line-bot-sdk>=3.5.0

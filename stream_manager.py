@@ -15,6 +15,24 @@ from urllib3.util.retry import Retry  # type: ignore[import-untyped]
 import config
 
 
+def _format_host_for_url(host: str) -> str:
+    """
+    URL host formatting:
+    - IPv4 / domain: 그대로
+    - IPv6: wrap with []
+    """
+    h = (host or "").strip()
+    if not h:
+        return h
+    # Already bracketed IPv6
+    if h.startswith("[") and h.endswith("]"):
+        return h
+    # If host contains ":" it's likely IPv6 literal
+    if ":" in h:
+        return f"[{h}]"
+    return h
+
+
 class StreamManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -26,6 +44,7 @@ class StreamManager:
         self._frame_timeout_sec = getattr(
             config, "STREAM_FRAME_TIMEOUT_SEC", 3.0
         )
+        self._last_pull_err_log_ts: float = 0.0
 
     def set_esp32_ip(self, ip: str) -> None:
         """設定 ESP32 IP（由 UDP 發現或首次請求取得），並啟動拉流（若尚未啟動）。"""
@@ -62,7 +81,14 @@ class StreamManager:
 
     def _start_puller(self, esp32_ip: str) -> None:
         def run() -> None:
-            url = f"http://{esp32_ip}:{config.ESP32_STREAM_PORT}{config.ESP32_STREAM_PATH}"
+            stream_url = (getattr(config, "ESP32_STREAM_URL", "") or "").strip()
+            if stream_url:
+                # 雲端部署：由使用者提供一個雲端可存取的公開 URL
+                url = stream_url
+            else:
+                host = _format_host_for_url(esp32_ip)
+                url = f"http://{host}:{config.ESP32_STREAM_PORT}{config.ESP32_STREAM_PATH}"
+            print(f"[Stream] Pulling MJPEG from {url!r}")
             boundary = b"frame"
             buf = b""
             while not self._puller_stop.is_set():
@@ -89,33 +115,35 @@ class StreamManager:
                                     buf = buf[-512 * 1024:]
                                 break
                             rest = buf[idx + len(start):]
-                            end = rest.find(b"\r\n\r\n")
-                            if end == -1:
+                            # 在邊界後有限範圍內找 Content-Length（相容：單一 header 區塊，或舊韌體分兩段送）
+                            head_scan = rest[: min(len(rest), 65536)]
+                            mlen = re.search(rb"Content-Length:\s*(\d+)", head_scan)
+                            if mlen is None:
+                                if len(rest) > 65536:
+                                    buf = buf[idx + 2:]
                                 break
-                            headers = rest[:end].decode("utf-8", errors="ignore")
-                            body_start = end + 4
-                            cl = None
-                            if "Content-Length:" in headers:
-                                try:
-                                    m = re.search(r"Content-Length:\s*(\d+)", headers)
-                                    if m is not None:
-                                        cl = int(m.group(1))
-                                except (AttributeError, ValueError):
-                                    pass
-                            if cl is not None:
-                                if len(rest) >= body_start + cl:
-                                    jpg = rest[body_start:body_start + cl]
-                                    buf = rest[body_start + cl:]
-                                    self.set_frame(jpg)
-                                else:
-                                    buf = buf[idx:]
-                                    break
-                            else:
-                                buf = rest[body_start:]
-                            break
+                            try:
+                                cl = int(mlen.group(1))
+                            except ValueError:
+                                buf = buf[idx + 2:]
+                                break
+                            end_hdr = rest.find(b"\r\n\r\n", mlen.start())
+                            if end_hdr == -1:
+                                break
+                            body_start = end_hdr + 4
+                            if cl < 0 or len(rest) < body_start + cl:
+                                buf = buf[idx:]
+                                break
+                            jpg = rest[body_start : body_start + cl]
+                            buf = rest[body_start + cl :]
+                            self.set_frame(jpg)
+                            continue
                 except (requests.RequestException, OSError) as e:
                     if not self._puller_stop.is_set():
-                        print(f"[Stream] Pull error: {e}")
+                        now = time.time()
+                        if now - self._last_pull_err_log_ts >= 15.0:
+                            print(f"[Stream] Pull error: {e}")
+                            self._last_pull_err_log_ts = now
                 finally:
                     try:
                         if r is not None:

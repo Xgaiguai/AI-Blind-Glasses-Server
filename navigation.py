@@ -89,7 +89,7 @@ def tick_navigation(
     """
     session = get_nav_session()
     state = session.get_state()
-    if state not in (NavState.NAVIGATING, NavState.REROUTING):
+    if state not in (NavState.NAVIGATING, NavState.BLINDPATH_NAV, NavState.REROUTING):
         return
     gps = get_last_gps_fn(max_age_sec)
     if not gps:

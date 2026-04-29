@@ -38,6 +38,23 @@ uvicorn main:app --host 0.0.0.0 --port 5000
 
 或 `python main.py`。
 
+## 雲端部署準備（ESP32 影像串流可被雲端存取）
+
+目前伺服器端會主動拉取 ESP32 的 MJPEG 串流（預設：`http://<ESP32_IP>:81/stream`）。如果你的雲端 server 無法直接連到 ESP32 的私網 IP，就需要把 ESP32 的 `:81/stream` 暴露成「雲端可存取」的公開 URL。
+
+1. 設定串流 URL（建議）
+- 在 `server/config.py`/環境變數設 `ESP32_STREAM_URL` 為公開串流網址（完整 URL，包含 `/stream` 路徑）
+- 範例（視你的工具而定）：
+  - `ESP32_STREAM_URL=https://xxxx.ngrok-free.app/stream`
+  - 或 `ESP32_STREAM_URL=http://你的路由器公開IP:81/stream`（需確保 81 端口已轉發）
+
+2. 關閉 UDP discovery（雲端通常不通）
+- 設 `ENABLE_UDP_DISCOVERY=0`
+- 原因：雲端環境常常 UDP 不通，所以不啟動 `9999/WHO_IS_SERVER` 的 discovery thread
+
+3. CPU-only 與模型快取（避免每次重啟重下載）
+- faster-whisper 第一次轉寫會下載 Whisper 模型權重；建議部署前先跑過一次 ASR，讓 HF cache 落在持久化磁碟
+
 ## YOLOv8 模型
 
 請自行匯出 ONNX 並放到 `models/yolov8n.onnx`，例如：

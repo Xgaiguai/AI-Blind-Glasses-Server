@@ -1,6 +1,7 @@
 """
 導航狀態機與共享 session 狀態模型。
-狀態：IDLE、NAVIGATING、REROUTING、ARRIVED、CROSSING_WAIT、CROSSING_GO
+
+本專案狀態以你現有邏輯為主，同時擴充對齊上游的「視覺模式」狀態名稱。
 """
 
 import enum
@@ -16,6 +17,13 @@ class NavState(enum.Enum):
     ARRIVED = "arrived"
     CROSSING_WAIT = "crossing_wait"
     CROSSING_GO = "crossing_go"
+
+    # 以下為對齊上游架構的擴充狀態（現階段用於監控顯示/模式切換）
+    BLINDPATH_NAV = "blindpath_nav"
+    SEEKING_CROSSWALK = "seeking_crosswalk"
+    WAIT_TRAFFIC_LIGHT = "wait_traffic_light"
+    CROSSING = "crossing"
+    ITEM_SEARCH = "item_search"
 
 
 # 導航 step: (instruction, distance_m)

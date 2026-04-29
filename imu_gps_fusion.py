@@ -8,9 +8,31 @@ IMU + GPS 融合（MVP）：
 import math
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import config
+
+
+def _read_float_axis(
+    data: Dict[str, Any],
+    flat_keys: Tuple[str, ...],
+    nested_name: Optional[str],
+    nested_key: str,
+) -> Optional[float]:
+    for k in flat_keys:
+        if k in data:
+            try:
+                return float(data[k])
+            except (TypeError, ValueError):
+                pass
+    if nested_name:
+        nested = data.get(nested_name)
+        if isinstance(nested, dict) and nested_key in nested:
+            try:
+                return float(nested[nested_key])
+            except (TypeError, ValueError):
+                pass
+    return None
 
 
 def _normalize_deg(deg: float) -> float:
@@ -40,49 +62,78 @@ def _bearing_deg(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 class ImuGpsFusion:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         self._heading_deg: Optional[float] = None
         self._last_imu_ts: Optional[float] = None
-        self._last_gz_dps: float = 0.0
+        self._last_gx_dps: Optional[float] = None
+        self._last_gy_dps: Optional[float] = None
+        self._last_gz_dps: Optional[float] = None
+        self._last_ax_g: Optional[float] = None
+        self._last_ay_g: Optional[float] = None
+        self._last_az_g: Optional[float] = None
         self._last_gps_ts: Optional[float] = None
         self._last_gps: Optional[Dict[str, float]] = None
         self._prev_gps: Optional[Dict[str, float]] = None
+        self._last_imu_sample: Dict[str, float] = {}
 
         self._smooth_alpha = float(getattr(config, "HEADING_SMOOTH_ALPHA", 0.3))
         self._turn_threshold_dps = float(getattr(config, "TURN_THRESHOLD_DPS", 15.0))
 
     def update_imu(self, data: Dict[str, Any]) -> None:
-        """輸入 IMU JSON，重點使用 gz（deg/s）。"""
-        gz = None
-        for k in ("gz", "gyro_z", "gyr_z", "z"):
-            if k in data:
-                gz = data.get(k)
-                break
-        if gz is None and isinstance(data.get("gyro"), dict):
-            gz = data["gyro"].get("z")
-        if gz is None:
+        """輸入 IMU JSON；gz 用於航向積分，gx/gy/gz 與 ax/ay/az 供監控顯示。"""
+        gx = _read_float_axis(data, ("gx", "gyro_x", "gyr_x"), "gyro", "x")
+        gy = _read_float_axis(data, ("gy", "gyro_y", "gyr_y"), "gyro", "y")
+        gz = _read_float_axis(data, ("gz", "gyro_z", "gyr_z", "z"), "gyro", "z")
+        ax = _read_float_axis(data, ("ax", "acc_x"), "accel", "x")
+        ay = _read_float_axis(data, ("ay", "acc_y"), "accel", "y")
+        az = _read_float_axis(data, ("az", "acc_z"), "accel", "z")
+
+        if all(v is None for v in (gx, gy, gz, ax, ay, az)):
             return
 
-        try:
-            gz_dps = float(gz)
-        except (TypeError, ValueError):
-            return
+        sample: Dict[str, float] = {}
+        for key, val in (("gx", gx), ("gy", gy), ("gz", gz), ("ax", ax), ("ay", ay), ("az", az)):
+            if val is not None:
+                sample[key] = float(val)
 
         now = time.time()
         with self._lock:
+            updated_any = False
+            if gx is not None:
+                self._last_gx_dps = gx
+                updated_any = True
+            if gy is not None:
+                self._last_gy_dps = gy
+                updated_any = True
+            if ax is not None:
+                self._last_ax_g = ax
+                updated_any = True
+            if ay is not None:
+                self._last_ay_g = ay
+                updated_any = True
+            if az is not None:
+                self._last_az_g = az
+                updated_any = True
+
+            if gz is None:
+                if updated_any:
+                    self._last_imu_ts = now
+                    self._last_imu_sample = dict(sample)
+                return
+
+            self._last_gz_dps = gz
+            self._last_imu_sample = dict(sample)
             if self._heading_deg is None:
                 self._heading_deg = 0.0
                 self._last_imu_ts = now
-                self._last_gz_dps = gz_dps
                 return
 
             if self._last_imu_ts is not None:
                 dt = max(0.0, min(now - self._last_imu_ts, 1.0))
-                self._heading_deg = _normalize_deg(self._heading_deg + gz_dps * dt)
+                self._heading_deg = _normalize_deg(self._heading_deg + gz * dt)
 
             self._last_imu_ts = now
-            self._last_gz_dps = gz_dps
 
     def update_gps(self, lat: float, lng: float, course: Optional[float] = None) -> None:
         """輸入 GPS；course 若不存在，改由前後兩點估算。"""
@@ -132,6 +183,8 @@ class ImuGpsFusion:
     def is_turning_left_right(self) -> Optional[str]:
         with self._lock:
             gz = self._last_gz_dps
+        if gz is None:
+            return None
         if gz >= self._turn_threshold_dps:
             return "left"
         if gz <= -self._turn_threshold_dps:
@@ -142,7 +195,7 @@ class ImuGpsFusion:
         with self._lock:
             gps_ts = self._last_gps_ts
             imu_ts = self._last_imu_ts
-            gz = abs(self._last_gz_dps)
+            gz = abs(self._last_gz_dps or 0.0)
         now = time.time()
         gps_age = 99.0 if gps_ts is None else now - gps_ts
         imu_age = 99.0 if imu_ts is None else now - imu_ts
@@ -153,11 +206,27 @@ class ImuGpsFusion:
         return round(max(0.0, min(1.0, gps_score * 0.6 + imu_score * 0.4)) * motion_penalty, 2)
 
     def get_snapshot(self) -> Dict[str, Any]:
-        return {
-            "heading_deg": self.get_heading_deg(),
-            "turning": self.is_turning_left_right(),
-            "confidence": self.get_confidence(),
-        }
+        with self._lock:
+            def _r(v: Optional[float]) -> Optional[float]:
+                return None if v is None else round(v, 2)
+
+            dbg = (
+                {k: round(v, 2) for k, v in self._last_imu_sample.items()}
+                if self._last_imu_sample
+                else None
+            )
+            return {
+                "heading_deg": self.get_heading_deg(),
+                "turning": self.is_turning_left_right(),
+                "confidence": self.get_confidence(),
+                "gx": _r(self._last_gx_dps),
+                "gy": _r(self._last_gy_dps),
+                "gz": _r(self._last_gz_dps),
+                "ax": _r(self._last_ax_g),
+                "ay": _r(self._last_ay_g),
+                "az": _r(self._last_az_g),
+                "last_imu_sample": dbg,
+            }
 
 
 _fusion = ImuGpsFusion()

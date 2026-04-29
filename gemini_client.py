@@ -6,6 +6,7 @@ import io
 from typing import Optional
 
 import config
+from gemini_pool import call_with_pool, has_key
 
 try:
     import google.generativeai as genai  # type: ignore[import-untyped]
@@ -22,11 +23,7 @@ except ImportError:
 
 
 def _ensure_configured() -> bool:
-    if not getattr(config, "GEMINI_API_KEY", ""):
-        return False
-    if _HAS_GEMINI:
-        genai.configure(api_key=config.GEMINI_API_KEY)
-    return _HAS_GEMINI
+    return has_key() and _HAS_GEMINI
 
 
 def _call_gemini(image_bytes: bytes, prompt: str) -> str:
@@ -34,20 +31,21 @@ def _call_gemini(image_bytes: bytes, prompt: str) -> str:
     if not _ensure_configured():
         return ""
     try:
-        model = genai.GenerativeModel(config.GEMINI_MODEL)
-        if _HAS_PIL and Image is not None:
-            img = Image.open(io.BytesIO(image_bytes))
-            response = model.generate_content([prompt, img])
-        else:
+        def _do(model):
+            if _HAS_PIL and Image is not None:
+                img = Image.open(io.BytesIO(image_bytes))
+                return model.generate_content([prompt, img])
             img_part = {
                 "inline_data": {
                     "mime_type": "image/jpeg",
                     "data": image_bytes,
                 }
             }
-            response = model.generate_content([prompt, img_part])
-        if response and response.text:
-            return response.text.strip()
+            return model.generate_content([prompt, img_part])
+
+        response = call_with_pool(_do)
+        if response and getattr(response, "text", None):
+            return str(response.text).strip()
     except Exception as e:
         print(f"[Gemini] Error: {e}")
     return ""

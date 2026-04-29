@@ -41,12 +41,25 @@ def run_udp_listener(on_esp32_seen: Optional[Callable[[str], None]] = None) -> N
     while True:
         try:
             data, addr = sock.recvfrom(256)
-            msg = data.decode().strip()
+            try:
+                msg = data.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                msg = ""
+            if getattr(config, "UDP_RECV_LOG", False):
+                preview = (msg[:80] + "…") if len(msg) > 80 else msg
+                print(
+                    f"[UDP] recv {addr[0]}:{addr[1]} ({len(data)} B)"
+                    f"{' -> ' + repr(preview) if preview else ' (binary/non-utf8)'}"
+                )
+            if not msg:
+                continue
             if msg == config.UDP_DISCOVERY_MSG:
                 sock.sendto(response, addr)
                 print(f"[UDP] Replied to {addr[0]} -> SERVER_IP: {my_ip}")
                 if on_esp32_seen:
                     on_esp32_seen(addr[0])
+            elif getattr(config, "UDP_RECV_LOG", False):
+                print(f"[UDP] ignore (not WHO_IS_SERVER) from {addr[0]}")
         except socket.timeout:
             continue
         except Exception as e:

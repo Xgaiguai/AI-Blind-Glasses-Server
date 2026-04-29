@@ -12,12 +12,25 @@
 """
 
 import enum
+import os
 import time
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 import config
 from gemini_client import analyze_traffic_light
+
+try:
+    import cv2  # type: ignore[import-untyped]
+    import numpy as np  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover
+    cv2 = None  # type: ignore[assignment]
+    np = None  # type: ignore[assignment]
+
+try:
+    from ultralytics import YOLO  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover
+    YOLO = None  # type: ignore[assignment]
 
 
 class CrossingState(enum.Enum):
@@ -73,6 +86,90 @@ def _parse_traffic_color(text: str) -> str:
     return "unknown"
 
 
+# ---- 可選：YOLO 紅綠燈偵測 ----
+_TRAFFIC_LIGHT_YOLO_MODEL_PATH = (
+    getattr(config, "TRAFFIC_LIGHT_YOLO_MODEL_PATH", "")
+    or os.environ.get("TRAFFIC_LIGHT_YOLO_MODEL_PATH", "")
+)
+
+_YOLO_CONF_THRES = float(getattr(config, "TRAFFIC_LIGHT_YOLO_CONF_THRES", 0.25))
+_yolo_model: Optional[Any] = None
+_yolo_ready = False
+
+
+def _try_yolo_color(bgr_img: Any) -> str:
+    """
+    透過 YOLO 模型回傳 red/green/yellow/unknown。
+    若模型或依賴不可用則回傳 unknown（由外層 fallback 到 Gemini）。
+    """
+    global _yolo_model, _yolo_ready
+
+    if YOLO is None or cv2 is None or np is None:
+        return "unknown"
+    if not _TRAFFIC_LIGHT_YOLO_MODEL_PATH:
+        return "unknown"
+    if not os.path.exists(_TRAFFIC_LIGHT_YOLO_MODEL_PATH):
+        return "unknown"
+
+    if not _yolo_ready:
+        try:
+            _yolo_model = YOLO(_TRAFFIC_LIGHT_YOLO_MODEL_PATH)
+            _yolo_ready = True
+        except Exception:
+            _yolo_ready = False
+            return "unknown"
+
+    try:
+        # Ultralytics 對 BGR/uint8 img 通常可直接處理
+        results = _yolo_model(bgr_img, conf=_YOLO_CONF_THRES, verbose=False)
+        if not results:
+            return "unknown"
+        r = results[0]
+        names = getattr(r, "names", None) or getattr(_yolo_model, "names", None) or {}
+        boxes = getattr(r, "boxes", None)
+        if boxes is None:
+            return "unknown"
+
+        cls = getattr(boxes, "cls", None)
+        conf = getattr(boxes, "conf", None)
+        if cls is None or conf is None:
+            return "unknown"
+
+        best_color = "unknown"
+        best_conf = 0.0
+        for i in range(len(cls)):
+            try:
+                cid = int(cls[i])
+                cconf = float(conf[i])
+            except Exception:
+                continue
+            name = str(names.get(cid, cid)).lower() if isinstance(names, dict) else str(cid).lower()
+
+            color = "unknown"
+            if "red" in name or "stop" in name:
+                color = "red"
+            elif "green" in name or name in ("go",):
+                color = "green"
+            elif "yellow" in name or "amber" in name or "countdown" in name or "wait" in name:
+                # 模型可能把倒計時也拆成類別，統一視為 yellow/unknown→yellow
+                if "stop" in name or "red" in name:
+                    color = "red"
+                else:
+                    color = "yellow"
+
+            # 嚴格：僅允許 red/green/yellow
+            if color not in ("red", "green", "yellow"):
+                color = "unknown"
+
+            if color != "unknown" and cconf > best_conf:
+                best_conf = cconf
+                best_color = color
+
+        return best_color
+    except Exception:
+        return "unknown"
+
+
 class TrafficCrossingController:
     """
     紅綠燈 / 過馬路流程控制器。
@@ -84,6 +181,7 @@ class TrafficCrossingController:
         self._state = CrossingState.IDLE
         self._major = MajorityFilter(size=8)
         self._last_color = "unknown"
+        self._last_tts_text = ""
         self._last_tts_ts = 0.0
         self._cooldown_until = 0.0
         self._go_started_ts: Optional[float] = None
@@ -102,6 +200,7 @@ class TrafficCrossingController:
         return {
             "state": self._state.value,
             "last_color": self._last_color,
+            "last_tts_text": self._last_tts_text,
             "history": self._major.history(),
         }
 
@@ -110,6 +209,7 @@ class TrafficCrossingController:
         self._state = CrossingState.WAIT
         self._major.clear()
         self._last_color = "unknown"
+        self._last_tts_text = ""
         self._last_tts_ts = 0.0
         self._cooldown_until = time.time()  # 立即可說話
         self._go_started_ts = None
@@ -120,6 +220,7 @@ class TrafficCrossingController:
         self._state = CrossingState.IDLE
         self._major.clear()
         self._last_color = "unknown"
+        self._last_tts_text = ""
         self._go_started_ts = None
 
     def is_active(self) -> bool:
@@ -146,8 +247,21 @@ class TrafficCrossingController:
         if not frame_b:
             return
 
-        raw = analyze_traffic_light(frame_b)
-        color = _parse_traffic_color(raw)
+        # 先嘗試 YOLO；失敗則回落 Gemini
+        color = "unknown"
+        if _TRAFFIC_LIGHT_YOLO_MODEL_PATH and cv2 is not None:
+            try:
+                arr = np.frombuffer(frame_b, dtype=np.uint8) if np is not None else None
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR) if arr is not None else None
+                if img is not None:
+                    color = _try_yolo_color(img)
+            except Exception:
+                color = "unknown"
+
+        if color == "unknown":
+            raw = analyze_traffic_light(frame_b)
+            color = _parse_traffic_color(raw)
+
         self._major.push(color)
         major = self._major.majority()
         self._last_color = major
@@ -172,6 +286,7 @@ class TrafficCrossingController:
             return
         if tts_enqueue_fn(text):
             self._last_tts_ts = now
+            self._last_tts_text = text
 
     def _handle_wait(self, now: float, major: str, tts_enqueue_fn: Callable[[str], bool]) -> None:
         # 多數表決為綠燈，且最近幾幀都穩定綠燈才放行

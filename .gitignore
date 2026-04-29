@@ -5,7 +5,5 @@ venv/
 *.egg-info/
 data/
 .env
-line_bot.py
-models/
-*.onnx
-*.log
+.gemini/
+ngrok.exe

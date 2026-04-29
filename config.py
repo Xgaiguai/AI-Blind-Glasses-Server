@@ -21,11 +21,21 @@ HTTP_PORT = int(os.environ.get("HTTP_PORT", "5000"))
 UDP_PORT = 9999
 UDP_DISCOVERY_MSG = "WHO_IS_SERVER"
 UDP_RESPONSE_PREFIX = "SERVER_IP: "
+# 設為 1 時在終端機列出埠 9999 收到的每筆 UDP（僅探索用；陀螺儀仍走 HTTP /api/imu）
+UDP_RECV_LOG = os.environ.get("UDP_RECV_LOG", "0") == "1"
 
 # ----- MJPEG 串流（伺服器拉取 ESP32 的串流）-----
 # 韌體 STREAM_PORT=81, STREAM_PATH="/stream"
 ESP32_STREAM_PORT = 81
 ESP32_STREAM_PATH = "/stream"
+
+# 雲端部署：若你把 ESP32 的 MJPEG 串流用 tunnel/反代/port-forward 變成「雲端可存取」的公開 URL，
+# 就在這裡填完整網址（例如 https://xxxx.ngrok-free.app/stream 或 https://your-domain/esp32/stream）。
+# 若未設定，則依賴 UDP discovery / 首次 API 請求來源 IP 來推回來組 URL。
+ESP32_STREAM_URL = os.environ.get("ESP32_STREAM_URL", "").strip()
+
+# 雲端環境常常 UDP 不通，可關閉 UDP discovery 只靠 ESP32 直連的 HTTP 來源 host。
+ENABLE_UDP_DISCOVERY = os.environ.get("ENABLE_UDP_DISCOVERY", "1") == "1"
 STREAM_FRAME_TIMEOUT_SEC = 3.0  # 超過此時長未收到新 frame 視為無影像
 
 # ----- 資料與日誌 -----
@@ -45,6 +55,8 @@ OBSTACLE_AREA_RATIO_MIN = 0.05  # 物件佔畫面至少 5% 才提醒
 
 # ----- Gemini（免費版可用 2.5 Flash）-----
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # 或寫在 .env
+GEMINI_API_KEY_1 = os.environ.get("GEMINI_API_KEY_1", GEMINI_API_KEY)
+GEMINI_API_KEY_2 = os.environ.get("GEMINI_API_KEY_2", "")
 GEMINI_MODEL = "gemini-2.5-flash"  # 免費版 Flash 2.5；亦可改 gemini-2.0-flash
 GEMINI_SCENE_PROMPT = "請用一句簡短中文描述此畫面，適合語音播報給視障者（例如：前方有行人、路口有車輛）。不要列舉多項，只說最重要的一點。"
 GEMINI_TRAFFIC_PROMPT = (
@@ -55,9 +67,55 @@ GEMINI_TRAFFIC_PROMPT = (
     "- 若畫面中看不出紅綠燈狀態，回覆「無法判斷」"
 )
 
+# ----- LINE 家屬通知 -----
+LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "").strip()
+# 逗號分隔（userId/groupId/roomId）
+LINE_TARGET_IDS = os.environ.get("LINE_TARGET_IDS", "").strip()
+LINE_NOTIFY_ENABLE = os.environ.get("LINE_NOTIFY_ENABLE", "0") == "1"
+LINE_NOTIFY_COOLDOWN_SEC = float(os.environ.get("LINE_NOTIFY_COOLDOWN_SEC", "90"))
+LINE_REQUEST_TIMEOUT_SEC = float(os.environ.get("LINE_REQUEST_TIMEOUT_SEC", "6"))
+
+# ----- 跌倒偵測（IMU）-----
+FALL_ENABLE = os.environ.get("FALL_ENABLE", "1") == "1"
+FALL_GZ_DPS_THRESHOLD = float(os.environ.get("FALL_GZ_DPS_THRESHOLD", "160"))
+FALL_CONFIRM_SEC = float(os.environ.get("FALL_CONFIRM_SEC", "1.2"))
+FALL_COOLDOWN_SEC = float(os.environ.get("FALL_COOLDOWN_SEC", "120"))
+
 # ----- edge-tts -----
 EDGE_TTS_VOICE = "zh-TW-HsiaoChenNeural"
 TTS_QUEUE_MAX_SIZE = 10
+
+# ----- 本地 Whisper（台灣版 ASR）-----
+# 你韌體端錄音參數：
+# - MIC_SAMPLE_RATE=16000
+# - MIC_RECORD_SEC=4
+# faster-whisper 的 base 模型通常可直接對這種 16kHz wav 轉寫。
+ASR_WHISPER_MODEL = os.environ.get("ASR_WHISPER_MODEL", "base")
+ASR_WHISPER_LANG = os.environ.get("ASR_WHISPER_LANG", "zh")
+ASR_WHISPER_DEVICE = os.environ.get("ASR_WHISPER_DEVICE", "cpu")
+ASR_WHISPER_COMPUTE_TYPE = os.environ.get("ASR_WHISPER_COMPUTE_TYPE", "int8")
+# 可選：若你已手動下載 whisper 模型，可指定本地資料夾，避免台灣下載不穩
+ASR_WHISPER_MODEL_DIR = os.environ.get("ASR_WHISPER_MODEL_DIR", "")
+
+# ----- 物品查找（ITEM_SEARCH）-----
+# 目前 worker 預設使用 Gemini；若你之後接上 YOLOE+MediaPipe，這些路徑就會用到。
+ITEM_SEARCH_INTERVAL_SEC = float(os.environ.get("ITEM_SEARCH_INTERVAL_SEC", "1.5"))
+ITEM_SEARCH_TTS_MIN_INTERVAL_SEC = float(os.environ.get("ITEM_SEARCH_TTS_MIN_INTERVAL_SEC", "1.5"))
+
+# 物品查找自動結束（OK 連續達標 / 超時）
+ITEM_SEARCH_AUTO_STOP_ENABLE = os.environ.get("ITEM_SEARCH_AUTO_STOP_ENABLE", "1") == "1"
+# 連續偵測到 direction=OK 的次數（達到後自動停止）
+ITEM_SEARCH_OK_CONSECUTIVE_COUNT = int(os.environ.get("ITEM_SEARCH_OK_CONSECUTIVE_COUNT", "3"))
+# 最長搜尋時間（秒）；超時仍會自動停止，避免無限播報
+ITEM_SEARCH_MAX_SECONDS = float(os.environ.get("ITEM_SEARCH_MAX_SECONDS", "90"))
+
+# YOLOE/手部模型路徑（可留空；留空時會自動回退 Gemini）
+YOLOE_MODEL_PATH = os.environ.get("YOLOE_MODEL_PATH", "")
+HAND_LANDMARKER_TASK_PATH = os.environ.get("HAND_LANDMARKER_TASK_PATH", "")
+
+# 是否嘗試啟用視覺模型（未實作時仍會回退 Gemini；保留介面給後續接上）
+ENABLE_ITEM_SEARCH_VISION = os.environ.get("ENABLE_ITEM_SEARCH_VISION", "0") == "1"
 
 # ----- 導航到家 -----
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "")
@@ -75,8 +133,3 @@ TURN_THRESHOLD_DPS = float(os.environ.get("TURN_THRESHOLD_DPS", "15"))
 
 # ----- 紅綠燈/過馬路 -----
 CROSSING_CONFIRM_FRAMES = int(os.environ.get("CROSSING_CONFIRM_FRAMES", "3"))
-
-# ----- Line Bot -----
-LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
-LINE_CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
-SERVER_BASE_URL = os.environ.get("SERVER_BASE_URL", "http://localhost:8000")

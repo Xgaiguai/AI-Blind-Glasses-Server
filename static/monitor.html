@@ -3,97 +3,479 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>blind_glasses 監控面板</title>
+  <title>Vision 導盲監控終端</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0" />
   <style>
-    body { font-family: "Microsoft JhengHei", sans-serif; background:#111; color:#eee; margin:0; padding:16px; }
-    .grid { display:grid; grid-template-columns: 2fr 1fr; gap:16px; }
-    .card { background:#1c1c1c; border:1px solid #333; border-radius:8px; padding:12px; }
-    h1 { margin:0 0 12px 0; font-size:20px; }
-    h2 { margin:0 0 8px 0; font-size:16px; }
-    img { width:100%; border-radius:6px; background:#000; min-height:240px; object-fit:contain; }
-    .kv { line-height:1.6; font-size:14px; }
-    ul { margin:6px 0 0 18px; padding:0; font-size:13px; }
-    code { color:#7ee787; }
+    :root {
+      --bg-dark: #050505;
+      --panel-bg: #0a0a0a;
+      --border-color: #222;
+      --text-primary: #ededed;
+      --text-secondary: #888;
+      --accent: #fff;
+      --status-ok: #00e676;
+      --status-err: #ff3d00;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background-color: var(--bg-dark);
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 30px 30px;
+      color: var(--text-primary);
+      font-family: "Inter", sans-serif;
+      margin: 0;
+      padding: 1.25rem;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.75rem;
+    }
+    .header-title {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 1.1rem;
+      letter-spacing: 0.8px;
+      font-weight: 600;
+    }
+    .system-clock {
+      font-family: "JetBrains Mono", monospace;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+    .main-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 420px;
+      gap: 1rem;
+      min-height: 0;
+      flex: 1;
+    }
+    .video-container {
+      position: relative;
+      border: 1px solid var(--border-color);
+      background: #000;
+      overflow: hidden;
+      min-height: 420px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .video-offline {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+      background: repeating-linear-gradient(
+        45deg,
+        #050505,
+        #050505 10px,
+        #0a0a0a 10px,
+        #0a0a0a 20px
+      );
+      z-index: 1;
+      text-align: center;
+      padding: 1rem;
+      gap: 0.4rem;
+    }
+    .video-offline span { font-size: 30px; opacity: 0.6; }
+    .video-feed {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      z-index: 2;
+      position: relative;
+      display: block;
+    }
+    .cam-label {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border-color);
+      background: #000;
+      padding: 3px 8px;
+      font-size: 0.75rem;
+      font-family: "JetBrains Mono", monospace;
+    }
+    .rec-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--status-err);
+      animation: blink 2s infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+    .data-panel {
+      border: 1px solid var(--border-color);
+      background: var(--panel-bg);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .data-group {
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.95rem;
+      min-height: 0;
+    }
+    .data-group:last-child { border-bottom: none; }
+    .data-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      margin-bottom: 8px;
+    }
+    .data-value {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .mono-list {
+      margin: 0;
+      padding-left: 1rem;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.8rem;
+      color: #d7d7d7;
+      max-height: 150px;
+      overflow: auto;
+    }
+    .mono-list li { margin: 0.2rem 0; }
+    .status-footer {
+      padding: 0.75rem 0.95rem;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.75rem;
+      background: #050505;
+      gap: 0.5rem;
+    }
+    .conn-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--status-ok);
+      white-space: nowrap;
+    }
+    .conn-indicator.error { color: var(--status-err); }
+    .mini { color: var(--text-secondary); font-size: 0.75rem; }
+    .ok { color: var(--status-ok); }
   </style>
 </head>
 <body>
-  <h1>blind_glasses 監控面板</h1>
-  <div class="grid">
-    <div class="card">
-      <h2>即時畫面</h2>
-      <img id="frame" src="/api/monitor/frame" alt="frame" />
+  <div class="header">
+    <h1 class="header-title">
+      <span class="material-symbols-outlined">memory</span>
+      VISION SYSTEM 監控終端
+    </h1>
+    <div class="system-clock" id="sys-clock">SYNCING...</div>
+  </div>
+
+  <div class="main-layout">
+    <div class="video-container">
+      <div class="video-offline" id="offline-state">
+        <span class="material-symbols-outlined">videocam_off</span>
+        <div>NO SIGNAL / AWAITING STREAM</div>
+        <div id="frame-hint" class="mini">等待 /ws/viewer 或 /api/monitor/frame</div>
+      </div>
+      <img id="frame" class="video-feed" alt="camera stream" />
+      <div class="cam-label">
+        <div class="rec-dot"></div>
+        CAM_01 [FIRST_PERSON]
+      </div>
     </div>
-    <div class="card">
-      <h2>目前狀態</h2>
-      <div class="kv" id="state"></div>
-      <h2 style="margin-top:12px;">最近語音</h2>
-      <ul id="voice"></ul>
-      <h2 style="margin-top:12px;">最近事件</h2>
-      <ul id="events"></ul>
+
+    <div class="data-panel">
+      <div class="data-group">
+        <div class="data-label">
+          <span class="material-symbols-outlined" style="font-size:16px;">sensors</span>
+          TELEMETRY / 即時六軸
+        </div>
+        <div class="data-value" id="telemetry-val">WAITING...</div>
+      </div>
+
+      <div class="data-group">
+        <div class="data-label">
+          <span class="material-symbols-outlined" style="font-size:16px;">account_tree</span>
+          NAV_STATE / 導航狀態
+        </div>
+        <div class="data-value" id="nav-val">WAITING...</div>
+      </div>
+
+      <div class="data-group">
+        <div class="data-label">
+          <span class="material-symbols-outlined" style="font-size:16px;">my_location</span>
+          GPS / 家屬狀態
+        </div>
+        <div class="data-value" id="gps-val">WAITING...</div>
+      </div>
+
+      <div class="data-group">
+        <div class="data-label">
+          <span class="material-symbols-outlined" style="font-size:16px;">graphic_eq</span>
+          VOICE INTENT
+        </div>
+        <ul id="voice-list" class="mono-list"></ul>
+      </div>
+
+      <div class="data-group">
+        <div class="data-label">
+          <span class="material-symbols-outlined" style="font-size:16px;">event</span>
+          RECENT EVENTS
+        </div>
+        <ul id="events-list" class="mono-list"></ul>
+      </div>
+
+      <div class="status-footer">
+        <div class="conn-indicator" id="conn-status">
+          <span class="material-symbols-outlined" style="font-size:14px;">check_circle</span>
+          SERVER_CONNECTED
+        </div>
+        <div>UPTIME: <span id="uptime">00:00:00</span></div>
+      </div>
     </div>
   </div>
 
   <script>
     const frameEl = document.getElementById("frame");
-    const stateEl = document.getElementById("state");
-    const voiceEl = document.getElementById("voice");
-    const eventsEl = document.getElementById("events");
+    const offlineEl = document.getElementById("offline-state");
+    const frameHintEl = document.getElementById("frame-hint");
+    const telemetryEl = document.getElementById("telemetry-val");
+    const navEl = document.getElementById("nav-val");
+    const gpsEl = document.getElementById("gps-val");
+    const voiceEl = document.getElementById("voice-list");
+    const eventsEl = document.getElementById("events-list");
+    const connStatusEl = document.getElementById("conn-status");
 
-    function fmtStep(step) {
-      if (!step) return "無";
-      return `${step.instruction} (${step.distance_m || 0}m) [${(step.index || 0) + 1}/${step.total || 0}]`;
+    let lastFrameUrl = null;
+    const bootTs = Date.now();
+
+    const safe = (v, d = "-") => (v === null || v === undefined || Number.isNaN(v)) ? d : v;
+    const axis3 = (x, y, z) => `${safe(x)}, ${safe(y)}, ${safe(z)}`;
+    const esc = (s) => String(s ?? "-").replace(/[<>&]/g, (m) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[m]));
+    const stepText = (step) => {
+      if (!step) return "-";
+      return `${safe(step.instruction, "-")} (${safe(step.distance_m, 0)}m) [${safe(step.index, 0) + 1}/${safe(step.total, 0)}]`;
+    };
+
+    function updateClock() {
+      const now = new Date();
+      document.getElementById("sys-clock").innerText =
+        now.toLocaleString("zh-TW", { hour12: false });
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    function updateUptime() {
+      const sec = Math.floor((Date.now() - bootTs) / 1000);
+      const h = String(Math.floor(sec / 3600)).padStart(2, "0");
+      const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0");
+      const s = String(sec % 60).padStart(2, "0");
+      document.getElementById("uptime").innerText = `${h}:${m}:${s}`;
+    }
+    setInterval(updateUptime, 1000);
+    updateUptime();
+
+    function setConnected(ok) {
+      if (ok) {
+        connStatusEl.className = "conn-indicator";
+        connStatusEl.innerHTML = '<span class="material-symbols-outlined" style="font-size:14px;">check_circle</span> SERVER_CONNECTED';
+      } else {
+        connStatusEl.className = "conn-indicator error";
+        connStatusEl.innerHTML = '<span class="material-symbols-outlined" style="font-size:14px;">error</span> CONNECTION_LOST';
+      }
+    }
+
+    function updateStateUI(data) {
+      const nav = data.navigation || {};
+      const fusion = data.fusion || {};
+      const tl = data.traffic_light || {};
+      const item = data.item_search || {};
+      const family = data.family || {};
+      const gps = family.last_gps || {};
+      const fall = family.fall || {};
+      const health = data.server_health || {};
+      const mapUrl = gps.map_url || "";
+
+      telemetryEl.innerHTML = [
+        `heading_deg: <span class="ok">${safe(fusion.heading_deg)}</span>`,
+        `turning: ${esc(fusion.turning)}`,
+        `confidence: ${safe(fusion.confidence)}`,
+        `gyro(dps): ${axis3(fusion.gx, fusion.gy, fusion.gz)}`,
+        `acc(g): ${axis3(fusion.ax, fusion.ay, fusion.az)}`,
+        `imu_sample: ${fusion.last_imu_sample ? esc(JSON.stringify(fusion.last_imu_sample)) : "-"}`,
+        `imu_age_s: ${safe(health.last_imu_age_sec)} / gps_age_s: ${safe(health.last_gps_age_sec)}`
+      ].join("<br>");
+
+      navEl.innerHTML = [
+        `mode: <span class="ok">${esc(data.mode)}</span>`,
+        `last_tts: ${esc(nav.last_tts)}`,
+        `next_step: ${esc(stepText(nav.next_step))}`,
+        `traffic: ${esc(tl.state)} / color: ${esc(tl.last_color)}`,
+        `traffic_tts: ${esc(tl.last_tts_text)}`,
+        `item_search: ${item.active ? "ON" : "OFF"} / ${esc(item.phase)}`,
+        `item_target: ${esc(item.target)} / guidance: ${esc(item.last_guidance)}`,
+        `vision_status: ${esc(item.vision_status)}`
+      ].join("<br>");
+
+      gpsEl.innerHTML = [
+        `esp32_ip: ${esc(data.esp32_ip)}`,
+        `gps: ${safe(gps.lat)}, ${safe(gps.lng)}`,
+        `line_notify: ${family.line_notify_enable ? "ON" : "OFF"}`,
+        `fall: ${fall.active ? "ALERT" : "normal"}`,
+        `uptime_s: ${safe(health.uptime_sec)}`,
+        `map: ${mapUrl ? `<a href="${mapUrl}" target="_blank" rel="noreferrer">open</a>` : "-"}`
+      ].join("<br>");
+
+      voiceEl.innerHTML = "";
+      (data.recent_voice || []).slice().reverse().forEach((v) => {
+        const li = document.createElement("li");
+        li.textContent = v.text || "-";
+        voiceEl.appendChild(li);
+      });
+      if (!voiceEl.children.length) {
+        const li = document.createElement("li");
+        li.textContent = "等待語音資料...";
+        voiceEl.appendChild(li);
+      }
     }
 
     async function pollState() {
       try {
         const res = await fetch("/api/monitor/state", { cache: "no-store" });
+        if (!res.ok) throw new Error("state fetch failed");
         const data = await res.json();
-        const nav = data.navigation || {};
-        const fusion = data.fusion || {};
-        const tl = data.traffic_light || {};
-
-        stateEl.innerHTML = [
-          `模式: <code>${data.mode || "-"}</code>`,
-          `最近 TTS: <code>${nav.last_tts || "-"}</code>`,
-          `下一步: <code>${fmtStep(nav.next_step)}</code>`,
-          `Heading: <code>${fusion.heading_deg ?? "-"}</code>`,
-          `Turning: <code>${fusion.turning || "-"}</code>`,
-          `Confidence: <code>${fusion.confidence ?? "-"}</code>`,
-          `Traffic: <code>${tl.state || "-"}</code> / <code>${tl.last_color || "-"}</code>`,
-        ].join("<br>");
-
-        voiceEl.innerHTML = "";
-        (data.recent_voice || []).slice().reverse().forEach(v => {
-          const li = document.createElement("li");
-          li.textContent = v.text || "-";
-          voiceEl.appendChild(li);
-        });
-      } catch (_) {}
+        updateStateUI(data);
+        setConnected(true);
+      } catch (_) {
+        setConnected(false);
+      }
     }
 
     async function pollEvents() {
       try {
         const res = await fetch("/api/monitor/events?limit=8", { cache: "no-store" });
+        if (!res.ok) return;
         const data = await res.json();
         eventsEl.innerHTML = "";
-        (data.events || []).slice().reverse().forEach(ev => {
+        (data.events || []).slice().reverse().forEach((ev) => {
           const li = document.createElement("li");
           li.textContent = `${ev.type}: ${JSON.stringify(ev.payload || {})}`;
           eventsEl.appendChild(li);
         });
+        if (!eventsEl.children.length) {
+          const li = document.createElement("li");
+          li.textContent = "尚無事件";
+          eventsEl.appendChild(li);
+        }
       } catch (_) {}
     }
 
-    function refreshFrame() {
-      frameEl.src = "/api/monitor/frame?t=" + Date.now();
+    function setFrameStatus(ok, hint) {
+      if (ok) {
+        offlineEl.style.display = "none";
+        frameEl.style.display = "block";
+      } else {
+        offlineEl.style.display = "flex";
+        frameEl.style.display = "none";
+      }
+      if (frameHintEl) frameHintEl.textContent = hint;
     }
 
-    setInterval(refreshFrame, 500);
-    setInterval(pollState, 500);
-    setInterval(pollEvents, 1000);
-    refreshFrame();
+    function connectWs(url, handlers) {
+      const ws = new WebSocket(url);
+      ws.onopen = () => { handlers._retries = 0; handlers.onopen?.(); };
+      ws.onmessage = (e) => handlers.onmessage?.(e);
+      ws.onclose = () => {
+        handlers.onclose?.();
+        const retries = (handlers._retries = (handlers._retries || 0) + 1);
+        const delay = Math.min(30000, 1000 * (2 ** retries));
+        setTimeout(() => connectWs(url, handlers), delay);
+      };
+      ws.onerror = () => {};
+      return ws;
+    }
+
+    const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+    const wsBase = `${wsProto}//${location.host}`;
+
+    connectWs(wsBase + "/ws/viewer", {
+      onopen: () => setFrameStatus(false, "WS connected, waiting frame..."),
+      onmessage: (e) => {
+        const blob = new Blob([e.data], { type: "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
+        lastFrameUrl = url;
+        frameEl.src = url;
+        setFrameStatus(true, "Live stream via /ws/viewer");
+      }
+    });
+
+    connectWs(wsBase + "/ws_ui", {
+      onmessage: (e) => {
+        try { updateStateUI(JSON.parse(e.data)); } catch (_) {}
+      }
+    });
+
+    let frameHttpMs = 250;
+    let frameHttpTimer = null;
+    function scheduleFrameHttpPoll() {
+      if (frameHttpTimer) clearTimeout(frameHttpTimer);
+      frameHttpTimer = setTimeout(async () => {
+        try {
+          const res = await fetch("/api/monitor/frame", { cache: "no-store" });
+          if (res.status === 204 || !res.ok) {
+            frameHttpMs = Math.min(3000, Math.floor(frameHttpMs * 1.35));
+            if (frameEl.src === "") setFrameStatus(false, "No frame yet, polling /api/monitor/frame...");
+            scheduleFrameHttpPoll();
+            return;
+          }
+          const blob = await res.blob();
+          if (!blob.size) {
+            frameHttpMs = Math.min(3000, Math.floor(frameHttpMs * 1.35));
+            scheduleFrameHttpPoll();
+            return;
+          }
+          frameHttpMs = 250;
+          const url = URL.createObjectURL(blob);
+          if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
+          lastFrameUrl = url;
+          frameEl.src = url;
+          setFrameStatus(true, "Fallback frame via /api/monitor/frame");
+        } catch (_) {
+          frameHttpMs = Math.min(3000, Math.floor(frameHttpMs * 1.35));
+        }
+        scheduleFrameHttpPoll();
+      }, frameHttpMs);
+    }
+
     pollState();
     pollEvents();
+    setInterval(pollState, 800);
+    setInterval(pollEvents, 1000);
+    scheduleFrameHttpPoll();
   </script>
 </body>
 </html>
