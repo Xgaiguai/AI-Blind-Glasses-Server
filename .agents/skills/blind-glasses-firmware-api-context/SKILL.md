@@ -3,6 +3,13 @@ name: blind-glasses-firmware-api-context
 description: "WHAT: 提供前端依賴的 firmware 與 API 事實查證流程，避免誤判。 WHEN: 進行前端資料串接前，或使用者提到韌體 API、藍牙BLE指令、裝置狀態時觸發。"
 ---
 
+> [!CAUTION]
+> **關於 FIRMWARE 代碼的編輯權限**
+> 1. Firmware 由使用者的朋友負責維護。
+> 2. **允許同步**：根據 `blind-glasses-pre-task-repo-check` 指令執行 `git pull` 同步最新規格是必要的。
+> 3. **禁止編輯**：禁止對 `firmware_reference` 資料夾下的檔案進行任何手動修改或編輯。
+> 4. **處理需求**：若需求涉及韌體更動，請在 App 端實作對應邏輯，並產出「韌體修改建議清單」交給使用者轉達給其朋友。
+
 # Source of Truth
 - 優先依據本地實際程式碼 (Workspace 內的 codebase)
 - Firmware Repo URL: https://github.com/YuQian081122/blind-glasses/tree/main/firmware

@@ -79,6 +79,15 @@ class ImuGpsFusion:
 
         self._smooth_alpha = float(getattr(config, "HEADING_SMOOTH_ALPHA", 0.3))
         self._turn_threshold_dps = float(getattr(config, "TURN_THRESHOLD_DPS", 15.0))
+        # 走停判斷（可由 config.py / env 調整）
+        self._motion_acc_delta_move = float(getattr(config, "MOTION_ACC_DELTA_MOVE_G", 0.08))
+        self._motion_acc_delta_stop = float(getattr(config, "MOTION_ACC_DELTA_STOP_G", 0.04))
+        self._motion_gyro_move = float(getattr(config, "MOTION_GYRO_MOVE_DPS", 18.0))
+        self._motion_gyro_stop = float(getattr(config, "MOTION_GYRO_STOP_DPS", 8.0))
+        self._motion_hold_sec = float(getattr(config, "MOTION_HOLD_SEC", 0.35))
+        self._is_moving = False
+        self._motion_candidate: Optional[bool] = None
+        self._motion_candidate_since = 0.0
 
     def update_imu(self, data: Dict[str, Any]) -> None:
         """輸入 IMU JSON；gz 用於航向積分，gx/gy/gz 與 ax/ay/az 供監控顯示。"""
@@ -118,11 +127,13 @@ class ImuGpsFusion:
 
             if gz is None:
                 if updated_any:
+                    self._update_motion_state_locked(now)
                     self._last_imu_ts = now
                     self._last_imu_sample = dict(sample)
                 return
 
             self._last_gz_dps = gz
+            self._update_motion_state_locked(now)
             self._last_imu_sample = dict(sample)
             if self._heading_deg is None:
                 self._heading_deg = 0.0
@@ -134,6 +145,42 @@ class ImuGpsFusion:
                 self._heading_deg = _normalize_deg(self._heading_deg + gz * dt)
 
             self._last_imu_ts = now
+
+    def _update_motion_state_locked(self, now: float) -> None:
+        ax = self._last_ax_g
+        ay = self._last_ay_g
+        az = self._last_az_g
+        gx = self._last_gx_dps
+        gy = self._last_gy_dps
+        gz = self._last_gz_dps
+        if None in (ax, ay, az, gx, gy, gz):
+            return
+
+        # 加速度單位假設為 g，靜止時 |a| 約 1g。
+        acc_norm = math.sqrt((ax or 0.0) ** 2 + (ay or 0.0) ** 2 + (az or 0.0) ** 2)
+        acc_delta = abs(acc_norm - 1.0)
+        gyro_norm = math.sqrt((gx or 0.0) ** 2 + (gy or 0.0) ** 2 + (gz or 0.0) ** 2)
+
+        if self._is_moving:
+            motion_vote = not (
+                acc_delta <= self._motion_acc_delta_stop and gyro_norm <= self._motion_gyro_stop
+            )
+        else:
+            motion_vote = (
+                acc_delta >= self._motion_acc_delta_move or gyro_norm >= self._motion_gyro_move
+            )
+
+        if self._motion_candidate is None or self._motion_candidate != motion_vote:
+            self._motion_candidate = motion_vote
+            self._motion_candidate_since = now
+            return
+
+        if (now - self._motion_candidate_since) >= self._motion_hold_sec:
+            self._is_moving = bool(self._motion_candidate)
+
+    def get_motion_state(self) -> str:
+        with self._lock:
+            return "moving" if self._is_moving else "stopped"
 
     def update_gps(self, lat: float, lng: float, course: Optional[float] = None) -> None:
         """輸入 GPS；course 若不存在，改由前後兩點估算。"""
@@ -225,6 +272,8 @@ class ImuGpsFusion:
                 "ax": _r(self._last_ax_g),
                 "ay": _r(self._last_ay_g),
                 "az": _r(self._last_az_g),
+                "is_moving": self._is_moving,
+                "motion_state": "moving" if self._is_moving else "stopped",
                 "last_imu_sample": dbg,
             }
 

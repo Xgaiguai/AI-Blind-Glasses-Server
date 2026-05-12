@@ -21,7 +21,7 @@ def family_quick_reply_dict() -> Dict[str, Any]:
             },
             {
                 "type": "action",
-                "action": {"type": "message", "label": "緊急通報", "text": "緊急"},
+                "action": {"type": "message", "label": "畫面", "text": "眼鏡畫面"},
             },
         ]
     }

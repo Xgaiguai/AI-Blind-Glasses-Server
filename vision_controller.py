@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import config
 
@@ -28,9 +28,77 @@ except Exception:  # pragma: no cover
     cv2 = None  # type: ignore[assignment]
     np = None  # type: ignore[assignment]
 
+try:
+    from ultralytics import YOLO  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover
+    YOLO = None  # type: ignore[assignment]
+
 from item_search_worker import get_snapshot as get_item_search_snapshot
 from navigation_state import get_nav_session
 from traffic_crossing import get_controller
+
+
+class BlindTileDetector:
+    """可選：導盲磚/斑馬線模型，輸出可視化框供 monitor 顯示。"""
+
+    def __init__(self) -> None:
+        self._model_path = str(getattr(config, "BLIND_TILE_MODEL_PATH", "") or "").strip()
+        self._conf = float(getattr(config, "BLIND_TILE_CONF_THRES", 0.35))
+        self._iou = float(getattr(config, "BLIND_TILE_IOU_THRES", 0.45))
+        self._target_classes = {
+            str(x).strip().lower() for x in (getattr(config, "BLIND_TILE_TARGET_CLASSES", []) or []) if str(x).strip()
+        }
+        self._model: Optional[Any] = None
+        self._enabled = bool(self._model_path and YOLO is not None)
+
+    def _ensure_model(self) -> bool:
+        if not self._enabled:
+            return False
+        if self._model is not None:
+            return True
+        try:
+            self._model = YOLO(self._model_path)
+            return True
+        except Exception:
+            self._model = None
+            return False
+
+    def detect(self, img_bgr: Any) -> List[Tuple[int, int, int, int, str, float]]:
+        """
+        回傳框清單：(x1, y1, x2, y2, class_name, conf)
+        """
+        if not self._ensure_model():
+            return []
+        try:
+            results = self._model(img_bgr, conf=self._conf, iou=self._iou, verbose=False)
+            if not results:
+                return []
+            r = results[0]
+            names = getattr(r, "names", None) or getattr(self._model, "names", None) or {}
+            boxes = getattr(r, "boxes", None)
+            if boxes is None:
+                return []
+            xyxy = getattr(boxes, "xyxy", None)
+            conf = getattr(boxes, "conf", None)
+            cls = getattr(boxes, "cls", None)
+            if xyxy is None or conf is None or cls is None:
+                return []
+
+            out: List[Tuple[int, int, int, int, str, float]] = []
+            for i in range(len(cls)):
+                try:
+                    cid = int(cls[i])
+                    score = float(conf[i])
+                    x1, y1, x2, y2 = [int(v) for v in xyxy[i].tolist()]
+                except Exception:
+                    continue
+                name = str(names.get(cid, cid)).lower() if isinstance(names, dict) else str(cid).lower()
+                if self._target_classes and name not in self._target_classes:
+                    continue
+                out.append((x1, y1, x2, y2, name, score))
+            return out
+        except Exception:
+            return []
 
 
 class VisionController:
@@ -45,6 +113,7 @@ class VisionController:
         self._frame_skip_n = max(1, int(getattr(config, "VISION_FRAME_SKIP_N", 2)))
         # 若解碼失敗就跳過
         self._enabled = bool(getattr(config, "ENABLE_VISION_OVERLAY", True))
+        self._blind_tile_detector = BlindTileDetector()
 
     def get_latest_annotated_frame_bytes(self, max_age_sec: float = 2.0) -> Optional[bytes]:
         if not self._enabled:
@@ -80,7 +149,10 @@ class VisionController:
             if img is None:
                 return
 
+            detections = self._blind_tile_detector.detect(img)
             annotated = self._overlay_state(img)
+            if detections:
+                self._draw_blind_tile_boxes(annotated, detections)
             ok, buf = cv2.imencode(".jpg", annotated, [int(getattr(config, "VISION_JPEG_QUALITY", 75))])
             if not ok:
                 return
@@ -141,4 +213,24 @@ class VisionController:
             cv2.putText(img_bgr, line, (x, y_i), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, thickness, cv2.LINE_AA)
 
         return img_bgr
+
+    def _draw_blind_tile_boxes(
+        self,
+        img_bgr: Any,
+        detections: List[Tuple[int, int, int, int, str, float]],
+    ) -> None:
+        for x1, y1, x2, y2, name, score in detections:
+            cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (255, 60, 40), 2)
+            label = f"{name} {score:.2f}"
+            y_text = y1 - 8 if y1 - 8 > 10 else y1 + 20
+            cv2.putText(
+                img_bgr,
+                label,
+                (x1, y_text),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.75,
+                (255, 60, 40),
+                2,
+                cv2.LINE_AA,
+            )
 

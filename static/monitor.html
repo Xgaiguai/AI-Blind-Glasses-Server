@@ -161,6 +161,22 @@
       overflow: auto;
     }
     .mono-list li { margin: 0.2rem 0; }
+    .audio-controls {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.5rem;
+    }
+    .audio-btn {
+      border: 1px solid var(--border-color);
+      background: #111;
+      color: var(--text-primary);
+      padding: 0.38rem 0.7rem;
+      font-size: 0.78rem;
+      cursor: pointer;
+      font-family: "JetBrains Mono", monospace;
+    }
+    .audio-btn:hover { background: #1b1b1b; }
     .status-footer {
       padding: 0.75rem 0.95rem;
       border-top: 1px solid var(--border-color);
@@ -182,6 +198,41 @@
     .conn-indicator.error { color: var(--status-err); }
     .mini { color: var(--text-secondary); font-size: 0.75rem; }
     .ok { color: var(--status-ok); }
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .telemetry-chip {
+      border: 1px solid var(--border-color);
+      padding: 6px 8px;
+      background: #0f0f0f;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 0.78rem;
+    }
+    .chip-key { color: var(--text-secondary); }
+    .chip-val { font-weight: 600; }
+    .chip-move { color: #7cffc4; }
+    .chip-stop { color: #ffcf66; }
+    .chip-turn { color: #8ad8ff; }
+    .axis-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .axis-table td {
+      border-top: 1px dashed #2a2a2a;
+      padding: 4px 2px;
+    }
+    .axis-name { color: var(--text-secondary); width: 44px; }
+    .axis-val { text-align: right; }
+    .mono-num { font-family: "JetBrains Mono", monospace; }
+
   </style>
 </head>
 <body>
@@ -248,6 +299,20 @@
         <ul id="events-list" class="mono-list"></ul>
       </div>
 
+      <div class="data-group">
+        <div class="data-label">
+          <span class="material-symbols-outlined" style="font-size:16px;">volume_up</span>
+          AUDIO CONTROL
+        </div>
+        <div class="audio-controls">
+          <button id="audio-play" class="audio-btn" type="button">PLAY</button>
+          <button id="audio-pause" class="audio-btn" type="button">PAUSE</button>
+          <button id="audio-reload" class="audio-btn" type="button">RELOAD</button>
+        </div>
+        <div class="data-value" id="audio-status">WAITING...</div>
+        <audio id="audio-player" preload="none" style="width:100%; margin-top:8px;"></audio>
+      </div>
+
       <div class="status-footer">
         <div class="conn-indicator" id="conn-status">
           <span class="material-symbols-outlined" style="font-size:14px;">check_circle</span>
@@ -268,17 +333,120 @@
     const voiceEl = document.getElementById("voice-list");
     const eventsEl = document.getElementById("events-list");
     const connStatusEl = document.getElementById("conn-status");
+    const audioPlayerEl = document.getElementById("audio-player");
+    const audioStatusEl = document.getElementById("audio-status");
+    const audioPlayBtn = document.getElementById("audio-play");
+    const audioPauseBtn = document.getElementById("audio-pause");
+    const audioReloadBtn = document.getElementById("audio-reload");
 
     let lastFrameUrl = null;
     const bootTs = Date.now();
+    const REPORT_DEMO_MODE = false; // 報告展示用：true=顯示假資料、false=連真實後端
+
+    const DEMO_STATE = {
+      mode: "-",
+      esp32_ip: "-",
+      fusion: {
+        gx: 3.22,
+        gy: -0.41,
+        gz: 18.57,
+        heading_deg: null,
+        turning: null,
+        is_moving: false,
+        motion_state: "已停止",
+        confidence: null,
+        ax: null,
+        ay: null,
+        az: null,
+        last_imu_sample: null
+      },
+      navigation: {},
+      traffic_light: {},
+      item_search: {
+        active: false,
+        phase: "-",
+        target: "-",
+        last_guidance: "-",
+        vision_status: "-"
+      },
+      family: {
+        line_notify_enable: false,
+        last_gps: {
+          lat: null,
+          lng: null,
+          map_url: ""
+        },
+        fall: { active: false }
+      },
+      server_health: {
+        uptime_sec: null,
+        last_imu_age_sec: 0.2,
+        last_gps_age_sec: null
+      },
+      recent_voice: []
+    };
+
+    const DEMO_EVENTS = [];
 
     const safe = (v, d = "-") => (v === null || v === undefined || Number.isNaN(v)) ? d : v;
     const axis3 = (x, y, z) => `${safe(x)}, ${safe(y)}, ${safe(z)}`;
     const esc = (s) => String(s ?? "-").replace(/[<>&]/g, (m) => ({ "<":"&lt;", ">":"&gt;", "&":"&amp;" }[m]));
+    const fmtNum = (v, digits = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "-" : Number(v).toFixed(digits);
     const stepText = (step) => {
       if (!step) return "-";
       return `${safe(step.instruction, "-")} (${safe(step.distance_m, 0)}m) [${safe(step.index, 0) + 1}/${safe(step.total, 0)}]`;
     };
+    const buildAudioUrl = () => `/audio/latest?t=${Date.now()}`;
+    const zhMotion = (motionState, isMoving) => {
+      if (motionState === "moving") return "移動中";
+      if (motionState === "stopped") return "已停止";
+      if (motionState) return motionState;
+      return isMoving ? "移動中" : "已停止";
+    };
+    const zhTurning = (turning) => {
+      if (turning === "left") return "左轉";
+      if (turning === "right") return "右轉";
+      if (!turning) return "無";
+      return turning;
+    };
+
+    function setAudioStatus(text) {
+      if (audioStatusEl) audioStatusEl.textContent = text;
+    }
+
+    function reloadAudioSource() {
+      if (!audioPlayerEl) return;
+      audioPlayerEl.src = buildAudioUrl();
+      audioPlayerEl.load();
+      setAudioStatus("Audio source reloaded");
+    }
+
+    if (audioPlayerEl) {
+      audioPlayerEl.src = buildAudioUrl();
+      audioPlayerEl.addEventListener("play", () => setAudioStatus("Playing /audio/latest"));
+      audioPlayerEl.addEventListener("pause", () => setAudioStatus("Paused"));
+      audioPlayerEl.addEventListener("ended", () => setAudioStatus("Playback ended"));
+      audioPlayerEl.addEventListener("error", () => setAudioStatus("Audio load/play failed"));
+    }
+    if (audioPlayBtn) {
+      audioPlayBtn.addEventListener("click", async () => {
+        if (!audioPlayerEl) return;
+        try {
+          await audioPlayerEl.play();
+        } catch (_) {
+          setAudioStatus("Browser blocked autoplay, click PLAY again");
+        }
+      });
+    }
+    if (audioPauseBtn) {
+      audioPauseBtn.addEventListener("click", () => {
+        if (!audioPlayerEl) return;
+        audioPlayerEl.pause();
+      });
+    }
+    if (audioReloadBtn) {
+      audioReloadBtn.addEventListener("click", reloadAudioSource);
+    }
 
     function updateClock() {
       const now = new Date();
@@ -318,16 +486,26 @@
       const fall = family.fall || {};
       const health = data.server_health || {};
       const mapUrl = gps.map_url || "";
+      const motionZh = zhMotion(fusion.motion_state, fusion.is_moving);
+      const turningZh = zhTurning(fusion.turning);
+      const motionClass = motionZh === "移動中" ? "chip-move" : "chip-stop";
 
       telemetryEl.innerHTML = [
-        `heading_deg: <span class="ok">${safe(fusion.heading_deg)}</span>`,
-        `turning: ${esc(fusion.turning)}`,
-        `confidence: ${safe(fusion.confidence)}`,
-        `gyro(dps): ${axis3(fusion.gx, fusion.gy, fusion.gz)}`,
-        `acc(g): ${axis3(fusion.ax, fusion.ay, fusion.az)}`,
-        `imu_sample: ${fusion.last_imu_sample ? esc(JSON.stringify(fusion.last_imu_sample)) : "-"}`,
-        `imu_age_s: ${safe(health.last_imu_age_sec)} / gps_age_s: ${safe(health.last_gps_age_sec)}`
-      ].join("<br>");
+        `<div class="telemetry-grid">`,
+        `  <div class="telemetry-chip"><span class="chip-key">移動</span><span class="chip-val ${motionClass}">${esc(motionZh)}</span></div>`,
+        `  <div class="telemetry-chip"><span class="chip-key">轉向</span><span class="chip-val chip-turn">${esc(turningZh)}</span></div>`,
+        `  <div class="telemetry-chip"><span class="chip-key">Heading</span><span class="chip-val mono-num">${fmtNum(fusion.heading_deg, 1)}°</span></div>`,
+        `  <div class="telemetry-chip"><span class="chip-key">IMU Age</span><span class="chip-val mono-num">${fmtNum(health.last_imu_age_sec, 2)}s</span></div>`,
+        `</div>`,
+        `<table class="axis-table">`,
+        `  <tr><td class="axis-name">Gyro X</td><td class="axis-val mono-num">${fmtNum(fusion.gx)}</td></tr>`,
+        `  <tr><td class="axis-name">Gyro Y</td><td class="axis-val mono-num">${fmtNum(fusion.gy)}</td></tr>`,
+        `  <tr><td class="axis-name">Gyro Z</td><td class="axis-val mono-num">${fmtNum(fusion.gz)}</td></tr>`,
+        `  <tr><td class="axis-name">Acc X</td><td class="axis-val mono-num">${fmtNum(fusion.ax)}</td></tr>`,
+        `  <tr><td class="axis-name">Acc Y</td><td class="axis-val mono-num">${fmtNum(fusion.ay)}</td></tr>`,
+        `  <tr><td class="axis-name">Acc Z</td><td class="axis-val mono-num">${fmtNum(fusion.az)}</td></tr>`,
+        `</table>`
+      ].join("");
 
       navEl.innerHTML = [
         `mode: <span class="ok">${esc(data.mode)}</span>`,
@@ -404,6 +582,25 @@
       if (frameHintEl) frameHintEl.textContent = hint;
     }
 
+    function applyDemoData() {
+      updateStateUI(DEMO_STATE);
+      setConnected(true);
+      setAudioStatus("Demo data mode (no backend required)");
+      setFrameStatus(false, "DEMO MODE: 報告展示用假資料");
+      eventsEl.innerHTML = "";
+      if (!DEMO_EVENTS.length) {
+        const li = document.createElement("li");
+        li.textContent = "尚無事件";
+        eventsEl.appendChild(li);
+        return;
+      }
+      DEMO_EVENTS.forEach((ev) => {
+        const li = document.createElement("li");
+        li.textContent = `${ev.type}: ${JSON.stringify(ev.payload || {})}`;
+        eventsEl.appendChild(li);
+      });
+    }
+
     function connectWs(url, handlers) {
       const ws = new WebSocket(url);
       ws.onopen = () => { handlers._retries = 0; handlers.onopen?.(); };
@@ -441,11 +638,21 @@
 
     let frameHttpMs = 250;
     let frameHttpTimer = null;
+    let lastFrameEtag = "";
     function scheduleFrameHttpPoll() {
       if (frameHttpTimer) clearTimeout(frameHttpTimer);
       frameHttpTimer = setTimeout(async () => {
         try {
-          const res = await fetch("/api/monitor/frame", { cache: "no-store" });
+          const headers = {};
+          if (lastFrameEtag) headers["If-None-Match"] = lastFrameEtag;
+          const res = await fetch("/api/monitor/frame", { cache: "no-store", headers });
+          const etag = res.headers.get("ETag") || "";
+          if (res.status === 304 && etag) {
+            lastFrameEtag = etag;
+            frameHttpMs = Math.min(2000, Math.floor(frameHttpMs * 1.15));
+            scheduleFrameHttpPoll();
+            return;
+          }
           if (res.status === 204 || !res.ok) {
             frameHttpMs = Math.min(3000, Math.floor(frameHttpMs * 1.35));
             if (frameEl.src === "") setFrameStatus(false, "No frame yet, polling /api/monitor/frame...");
@@ -458,6 +665,7 @@
             scheduleFrameHttpPoll();
             return;
           }
+          if (etag) lastFrameEtag = etag;
           frameHttpMs = 250;
           const url = URL.createObjectURL(blob);
           if (lastFrameUrl) URL.revokeObjectURL(lastFrameUrl);
@@ -471,11 +679,15 @@
       }, frameHttpMs);
     }
 
-    pollState();
-    pollEvents();
-    setInterval(pollState, 800);
-    setInterval(pollEvents, 1000);
-    scheduleFrameHttpPoll();
+    if (REPORT_DEMO_MODE) {
+      applyDemoData();
+    } else {
+      pollState();
+      pollEvents();
+      setInterval(pollState, 800);
+      setInterval(pollEvents, 1000);
+      scheduleFrameHttpPoll();
+    }
   </script>
 </body>
 </html>

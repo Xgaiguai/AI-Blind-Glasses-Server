@@ -38,6 +38,23 @@ ESP32_STREAM_URL = os.environ.get("ESP32_STREAM_URL", "").strip()
 ENABLE_UDP_DISCOVERY = os.environ.get("ENABLE_UDP_DISCOVERY", "1") == "1"
 STREAM_FRAME_TIMEOUT_SEC = 3.0  # 超過此時長未收到新 frame 視為無影像
 
+# ----- 併發與監控串流效能 -----
+# 阻塞型任務（ASR / Gemini / LINE AI）分流到獨立 thread pool，避免互相搶 worker。
+ASR_EXECUTOR_MAX_WORKERS = int(os.environ.get("ASR_EXECUTOR_MAX_WORKERS", "2"))
+GEMINI_EXECUTOR_MAX_WORKERS = int(os.environ.get("GEMINI_EXECUTOR_MAX_WORKERS", "2"))
+LINE_AI_EXECUTOR_MAX_WORKERS = int(os.environ.get("LINE_AI_EXECUTOR_MAX_WORKERS", "2"))
+# 監控影像預設推送節奏（秒）；0.05 約 20fps，較 60fps 更省 CPU/頻寬。
+VIEWER_WS_INTERVAL_SEC = float(os.environ.get("VIEWER_WS_INTERVAL_SEC", "0.05"))
+# ASR 回應策略：預設 async 先回 202，再背景執行辨識與路由。
+ASR_DEFAULT_ASYNC = os.environ.get("ASR_DEFAULT_ASYNC", "1") == "1"
+# API 保護：同時處理中的 ASR / Gemini 請求上限（超過回 503，避免打爆 CPU）
+API_ASR_MAX_JOBS = max(1, int(os.environ.get("API_ASR_MAX_JOBS", "8")))
+API_GEMINI_MAX_JOBS = max(1, int(os.environ.get("API_GEMINI_MAX_JOBS", "3")))
+# ASR 非同步模式：槽滿時可排入等候佇列（滿則丟棄最舊）；設 0 則維持立即 503
+ASR_WAIT_QUEUE_MAX = max(0, int(os.environ.get("ASR_WAIT_QUEUE_MAX", "4")))
+# 啟動時預載 Whisper（降低第一次語音延遲）；設 0 關閉
+ASR_WHISPER_WARMUP = os.environ.get("ASR_WHISPER_WARMUP", "1") == "1"
+
 # ----- 資料與日誌 -----
 DATA_DIR = os.environ.get("DATA_DIR", "data")
 LOG_REQUESTS = True
@@ -100,8 +117,8 @@ ASR_WHISPER_MODEL_DIR = os.environ.get("ASR_WHISPER_MODEL_DIR", "")
 
 # ----- 物品查找（ITEM_SEARCH）-----
 # 目前 worker 預設使用 Gemini；若你之後接上 YOLOE+MediaPipe，這些路徑就會用到。
-ITEM_SEARCH_INTERVAL_SEC = float(os.environ.get("ITEM_SEARCH_INTERVAL_SEC", "1.5"))
-ITEM_SEARCH_TTS_MIN_INTERVAL_SEC = float(os.environ.get("ITEM_SEARCH_TTS_MIN_INTERVAL_SEC", "1.5"))
+ITEM_SEARCH_INTERVAL_SEC = float(os.environ.get("ITEM_SEARCH_INTERVAL_SEC", "0.4"))
+ITEM_SEARCH_TTS_MIN_INTERVAL_SEC = float(os.environ.get("ITEM_SEARCH_TTS_MIN_INTERVAL_SEC", "1.0"))
 
 # 物品查找自動結束（OK 連續達標 / 超時）
 ITEM_SEARCH_AUTO_STOP_ENABLE = os.environ.get("ITEM_SEARCH_AUTO_STOP_ENABLE", "1") == "1"
@@ -130,6 +147,34 @@ NAV_ARRIVAL_RADIUS_M = float(os.environ.get("NAV_ARRIVAL_RADIUS_M", "25"))
 # ----- IMU/GPS 融合 -----
 HEADING_SMOOTH_ALPHA = float(os.environ.get("HEADING_SMOOTH_ALPHA", "0.3"))
 TURN_THRESHOLD_DPS = float(os.environ.get("TURN_THRESHOLD_DPS", "15"))
+# 走停判斷（is_moving / motion_state）
+MOTION_ACC_DELTA_MOVE_G = float(os.environ.get("MOTION_ACC_DELTA_MOVE_G", "0.08"))
+MOTION_ACC_DELTA_STOP_G = float(os.environ.get("MOTION_ACC_DELTA_STOP_G", "0.04"))
+MOTION_GYRO_MOVE_DPS = float(os.environ.get("MOTION_GYRO_MOVE_DPS", "18"))
+MOTION_GYRO_STOP_DPS = float(os.environ.get("MOTION_GYRO_STOP_DPS", "8"))
+MOTION_HOLD_SEC = float(os.environ.get("MOTION_HOLD_SEC", "0.35"))
 
 # ----- 紅綠燈/過馬路 -----
 CROSSING_CONFIRM_FRAMES = int(os.environ.get("CROSSING_CONFIRM_FRAMES", "3"))
+
+# ----- 背景循環輪詢間隔（Phase 1-A 調參區）-----
+# 數值越小反應越快，但 CPU 負載越高；調整時搭配 benchmark_latency.py 驗證。
+YOLO_INTERVAL_SEC = float(os.environ.get("YOLO_INTERVAL_SEC", "0.15"))
+NAV_INTERVAL_SEC = float(os.environ.get("NAV_INTERVAL_SEC", "0.5"))
+CROSSING_INTERVAL_SEC = float(os.environ.get("CROSSING_INTERVAL_SEC", "0.4"))
+
+# ----- Cloudflare Tunnel / 雲端部署 -----
+CLOUDFLARE_TUNNEL_TOKEN = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "").strip()
+DEVICE_API_TOKEN = os.environ.get("DEVICE_API_TOKEN", "").strip()
+PUBLIC_BASE_URL = os.environ.get("LINE_SNAPSHOT_BASE_URL", "").strip()
+
+# ----- 導盲磚偵測（monitor 視覺框）-----
+BLIND_TILE_MODEL_PATH = os.environ.get("BLIND_TILE_MODEL_PATH", "models/tactile_paving_detector.pt")
+BLIND_TILE_CONF_THRES = float(os.environ.get("BLIND_TILE_CONF_THRES", "0.35"))
+BLIND_TILE_IOU_THRES = float(os.environ.get("BLIND_TILE_IOU_THRES", "0.45"))
+BLIND_TILE_TARGET_CLASSES = [
+    x.strip().lower()
+    for x in os.environ.get("BLIND_TILE_TARGET_CLASSES", "crosswalk,tactile_paving,blind_brick")
+    .split(",")
+    if x.strip()
+]

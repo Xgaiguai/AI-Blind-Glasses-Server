@@ -1,3 +1,5 @@
+import json
+import os
 import time
 
 from fastapi import APIRouter, Request
@@ -25,7 +27,25 @@ router = APIRouter()
 _DEFAULT_BASE_URL = "https://solely-nonrenewable-freddy.ngrok-free.dev"
 NGROK_BASE_URL = (getattr(config, "LINE_SNAPSHOT_BASE_URL", "") or _DEFAULT_BASE_URL).rstrip("/")
 
-_home_location = {"lat": None, "lng": None, "address": None}
+HOME_LOCATION_FILE = os.path.join(os.path.dirname(__file__), "home_location.json")
+
+def load_home_location():
+    if os.path.exists(HOME_LOCATION_FILE):
+        try:
+            with open(HOME_LOCATION_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"lat": None, "lng": None, "address": None}
+
+def save_home_location(loc):
+    try:
+        with open(HOME_LOCATION_FILE, "w", encoding="utf-8") as f:
+            json.dump(loc, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Error] Failed to save home location: {e}")
+
+_home_location = load_home_location()
 
 
 @handler.add(MessageEvent, message=LocationMessage)
@@ -34,11 +54,13 @@ def handle_location_message(event):
     _home_location["lat"] = event.message.latitude
     _home_location["lng"] = event.message.longitude
     _home_location["address"] = event.message.address
+    save_home_location(_home_location)
 
     res = (
-        "🏠 系統已成功將住家位置設定為：\n"
-        f"「{event.message.address}」\n\n"
-        "未來只要按下「導航回家」，就會引導使用者回到這個地方喔！"
+        "【系統通知】\n"
+        "已成功將預設住家位置設定為：\n"
+        f"{event.message.address}\n\n"
+        "未來觸發「導航回家」時，將以此地址作為目的地。"
     )
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
 
@@ -51,85 +73,128 @@ def handle_message(event):
     print(f"DEBUG: 收到來自 LINE 的訊息 -> |{msg}|")
 
     help_text = (
-        "您好！我是導盲眼鏡的小幫手 🦉\n"
-        "以下是您可以隨時輸入的關鍵字，或點擊圖文選單來使用的功能：\n\n"
-        "【查詢位置】：查看戴著眼鏡的家人現在在哪裡。\n"
-        "【眼鏡畫面】：回傳眼鏡目前的即時視角，讓您看看他眼前的環境。\n"
-        "【眼鏡狀態】：確認眼鏡的連線、目前的導航模式與最新語音指令。\n"
-        "【導航回家】：遠端啟動眼鏡的導航功能，引導家人平安回家。\n"
-        "【緊急求助】：發送目前位置與現場畫面（通常由眼鏡端緊急觸發）。\n\n"
-        "💡 傳送「功能」或「幫助」即可再次呼叫此清單。"
+        "【智慧導盲眼鏡 系統選單】\n"
+        "請選擇或輸入以下指令以進行操作：\n\n"
+        "[1] 查詢位置：獲取設備當下 GPS 座標與地圖連結。\n"
+        "[2] 眼鏡畫面：擷取鏡頭當下即時影像。\n"
+        "[3] 眼鏡狀態：確認設備連線狀態、目前執行模式與最後指令。\n"
+        "[4] 設定住家：透過 LINE 傳送「位置資訊」設定導航目的地。\n\n"
+        "如需重新顯示本選單，請輸入「功能」或「選單」。"
     )
 
     if "查詢位置" in msg or "位置" in msg or "在哪" in msg:
-        gps = main._get_last_gps(max_age_sec=60)
-        if gps:
-            map_url = f"https://www.google.com/maps?q={gps['lat']},{gps['lng']}"
-            res = f"📍 馬上為您回報！家人目前的位置在這裡：\n{map_url}"
+        # 先嘗試取得 60 秒內的即時座標
+        gps_live = main._get_last_gps(max_age_sec=60)
+        if gps_live:
+            map_url = f"https://www.google.com/maps?q={gps_live['lat']},{gps_live['lng']}"
+            res = f"【位置資訊】\n定位更新完成。設備目前位置如下：\n{map_url}"
         else:
-            res = "📍 目前還在努力定位中，或暫時沒有 GPS 訊號，請稍等一下再試試看喔！"
+            # 如果沒有即時座標，尋找 15 分鐘內的最後已知座標
+            gps_last_known = main._get_last_gps(max_age_sec=900)
+            if gps_last_known:
+                age_min = max(1, int((time.time() - gps_last_known.get("ts", time.time())) // 60))
+                map_url = f"https://www.google.com/maps?q={gps_last_known['lat']},{gps_last_known['lng']}"
+                res = (
+                    "【位置資訊】\n"
+                    "⚠️ 目前設備可能處於室內或遮蔽處，暫無即時訊號。\n"
+                    f"📍 這是設備在 {age_min} 分鐘前最後回報的位置：\n{map_url}"
+                )
+            else:
+                res = "【系統警告】\n目前無法取得有效 GPS 訊號 (超過 15 分鐘未更新)。請確認使用者是否處於室內，或嘗試直接聯絡使用者。"
+                
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
 
     elif "拍攝畫面" in msg or "眼鏡畫面" in msg or "看看" in msg or "環境" in msg:
-        image_url = f"{NGROK_BASE_URL}/api/line_snapshot?t={int(time.time())}"
-        line_bot_api.reply_message(
-            event.reply_token,
-            [
-                TextSendMessage(text="📸 沒問題，正在為您擷取眼鏡目前的即時畫面..."),
-                ImageSendMessage(original_content_url=image_url, preview_image_url=image_url),
-            ],
-        )
+        frame = main._get_latest_frame_bytes()
+        if not frame:
+            res = "【系統警告】\n⚠️ 眼鏡鏡頭目前無畫面回傳，可能是設備已待機或網路訊號不佳。"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
+        else:
+            image_url = f"{NGROK_BASE_URL}/api/line_snapshot?t={int(time.time())}"
+            line_bot_api.reply_message(
+                event.reply_token,
+                [
+                    TextSendMessage(text="【影像擷取】\n系統已成功擷取設備即時畫面。"),
+                    ImageSendMessage(original_content_url=image_url, preview_image_url=image_url),
+                ],
+            )
 
     elif "眼鏡狀態" in msg or "狀態" in msg:
         nav_session = get_nav_session()
         mode = nav_session.get_state().value
         last_voice = main._recent_voice_intents[-1]["text"] if main._recent_voice_intents else "無"
 
+        health = main._server_health.snapshot()
+        imu_age = health.get("last_imu_age_sec")
+        uptime = health.get("uptime_sec", 0)
+        last_error = health.get("last_error", "")
+        
+        if uptime > 3600:
+            uptime_str = f"{int(uptime // 3600)} 小時 {int((uptime % 3600) // 60)} 分鐘"
+        elif uptime > 60:
+            uptime_str = f"{int(uptime // 60)} 分鐘"
+        else:
+            uptime_str = f"{int(uptime)} 秒"
+            
+        battery_str = "未知 (待韌體更新支援)"
+        
+        if imu_age is None:
+            conn_status = "🔴 設備尚未連線 (或正在重新啟動)"
+        elif imu_age > 30:
+            minutes = int(imu_age // 60)
+            if minutes > 0:
+                conn_status = f"🔴 設備已離線 (最後連線: {minutes} 分鐘前)"
+            else:
+                conn_status = "🔴 設備已離線 (最後連線: 剛剛)"
+        else:
+            conn_status = "🟢 正常運作中"
+
         res = (
-            "👓 【設備狀態回報】\n"
-            "● 連線狀態：🟢 正常運作中\n"
-            f"● 目前模式：{mode}\n"
-            f"● 最新語音指令：{last_voice}\n"
-            "一切平安，請您放心！"
+            "【設備狀態檢測】\n"
+            f"- 眼鏡連線狀態：{conn_status}\n"
+            f"- 設備剩餘電量：{battery_str}\n"
+            f"- 伺服器運行時間：{uptime_str}\n"
+            f"- 目前執行模式：{mode}\n"
+            f"- 最後語音指令：{last_voice}\n"
         )
+        if last_error:
+            res += f"- 最近系統警告：{last_error}\n"
+
+        if conn_status.startswith("🟢"):
+            res += "\n系統診斷結果：設備運作正常。"
+        else:
+            res += "\n【系統診斷警告】設備離線，請嘗試聯繫使用者確認安全。"
+            
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
 
-    elif "回家" in msg:
-        global _home_location
-        if _home_location["lat"] is None:
+    elif "設定住家" in msg or "設定家" in msg:
+        current_address = _home_location.get("address")
+        if current_address:
             res = (
-                "⚠️ 您還沒有設定住家位置喔！\n"
-                "請點擊 LINE 聊天室左下角的「+」，選擇「位置資訊」，搜尋並傳送您家的位置給我，就能完成設定了。"
+                "【系統提示】\n"
+                f"您目前已設定的住家位置為：\n📍 {current_address}\n\n"
+                "若要「更改」住家座標，請直接在 LINE 的輸入框點擊「＋」，選擇「位置資訊」，"
+                "然後選取您的新住家地址並送出即可。"
             )
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
         else:
-            start_navigation_to_home(tts_enqueue, main._get_last_gps, config.LAST_GPS_MAX_AGE_SEC)
             res = (
-                "🏠 已經幫您遠端啟動「導航回家」功能！\n"
-                f"眼鏡現在會開始用語音引導家人，朝著「{_home_location['address']}」的方向前進囉。"
+                "【系統提示】\n"
+                "您目前「尚未設定」住家位置。\n\n"
+                "若要設定住家座標，請直接在 LINE 的輸入框點擊「＋」，選擇「位置資訊」，"
+                "然後選取您的住家地址並送出即可。"
             )
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
 
-    elif "緊急求助" in msg:
-        gps = main._get_last_gps(max_age_sec=60)
-        sos_msg = "⚠️ 【緊急求助通知】\n使用者發出了求助訊號！\n請家屬立即確認下方位置與現場畫面。"
-
-        messages = [TextSendMessage(text=sos_msg)]
-
-        if gps:
-            messages.append(
-                LocationSendMessage(
-                    title="使用者緊急位置",
-                    address="點擊開啟導航",
-                    latitude=gps["lat"],
-                    longitude=gps["lng"],
-                )
-            )
-
-        image_url = f"{NGROK_BASE_URL}/api/line_snapshot?t={int(time.time())}"
-        messages.append(ImageSendMessage(original_content_url=image_url, preview_image_url=image_url))
-
-        line_bot_api.reply_message(event.reply_token, messages)
+    elif "緊急" in msg or "求助" in msg:
+        res = (
+            "【系統提示】\n"
+            "「緊急求助」為配戴者的主動安全防護機制，僅能由使用者透過語音 (如大喊「救命」) 或設備跌倒偵測自動觸發。\n\n"
+            "若您目前與使用者失去聯繫，建議您：\n"
+            "1. 點擊「查詢位置」確認最後座標\n"
+            "2. 點擊「眼鏡畫面」確認現場狀況\n"
+            "3. 嘗試透過一般通話聯繫使用者"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
 
     elif "功能" in msg or "幫助" in msg or "選單" in msg:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=help_text))

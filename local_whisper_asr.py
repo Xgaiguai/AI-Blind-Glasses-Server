@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+import io
 import os
 import tempfile
+import wave
 from typing import Optional
 
 import config
@@ -24,6 +26,19 @@ except Exception:  # pragma: no cover
 
 _model: Optional[object] = None
 _model_loaded: bool = False
+_warmup_done: bool = False
+
+
+def _minimal_silence_wav_bytes(duration_sec: float = 0.05, sample_rate: int = 16000) -> bytes:
+    """16-bit mono PCM WAV，與韌體錄音格式一致，供預熱用。"""
+    n = max(1, int(sample_rate * duration_sec))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(b"\x00\x00" * n)
+    return buf.getvalue()
 
 
 def _get_whisper_cfg() -> dict:
@@ -118,4 +133,19 @@ def transcribe_wav_bytes(audio_wav_bytes: bytes) -> str:
                 os.remove(tmp_path)
             except Exception:
                 pass
+
+
+def warmup_whisper(duration_sec: float = 0.05) -> bool:
+    """
+    強制載入模型並跑一次極短轉寫，降低首次使用者語音延遲。
+    """
+    global _warmup_done
+    if _warmup_done:
+        return True
+    try:
+        transcribe_wav_bytes(_minimal_silence_wav_bytes(duration_sec=duration_sec))
+    except Exception:
+        pass
+    _warmup_done = True
+    return True
 

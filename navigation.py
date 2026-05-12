@@ -66,6 +66,21 @@ def start_navigation_to_home(
         text = f"開始導航回家，距離約 {dist_str}。請{first_instruction}。"
     tts_enqueue_fn(text)
     session.set_last_tts(text)
+    
+    # 通知家屬端 (推播到 LINE)
+    import main
+    try:
+        route_dist = sum(d for _, d in steps_list)
+        notify_msg = (
+            f"【系統通知】\n"
+            f"使用者已主動啟動「導航回家」。\n"
+            f"預估步行距離約 {int(route_dist)} 公尺。\n"
+            f"(家屬可輸入「位置」或「狀態」持續關注)"
+        )
+        main._line_notifier.push_text(notify_msg)
+    except Exception as e:
+        print(f"[Error] Failed to notify LINE: {e}")
+        
     return True
 
 

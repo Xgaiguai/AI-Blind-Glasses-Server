@@ -1,5 +1,6 @@
 """
-edge-tts 語音佇列：依序將文字轉成語音並寫入固定檔案，供 GET /audio/latest 使用。
+edge-tts 語音佇列：依序將文字轉成語音並寫入版本化檔案，供 GET /audio/latest 使用。
+使用序號管理避免讀寫競爭：先寫入 latest_<seq>.mp3，再原子更新指標。
 """
 
 import asyncio
@@ -19,20 +20,44 @@ except ImportError:
     _HAS_EDGE_TTS = False
 
 VOICE = getattr(config, "EDGE_TTS_VOICE", "zh-TW-HsiaoChenNeural")
-OUTPUT_PATH = getattr(config, "AUDIO_LATEST_PATH", "audio/latest.mp3")
+OUTPUT_DIR = str(Path(getattr(config, "AUDIO_LATEST_PATH", "audio/latest.mp3")).parent)
 MAX_SIZE = getattr(config, "TTS_QUEUE_MAX_SIZE", 10)
+MAX_KEEP_FILES = 5
 
 _task_queue: queue.Queue = queue.Queue(maxsize=MAX_SIZE)
 _worker_started = False
 _lock = threading.Lock()
 
-# 基本去重：避免同一句短時間內重複入隊造成延遲
 _last_enqueued_text: str = ""
 _last_enqueued_ts: float = 0.0
 
+_seq_lock = threading.Lock()
+_current_seq: int = 0
+_current_path: Optional[str] = None
+
+
+def _seq_path(seq: int) -> str:
+    return os.path.join(OUTPUT_DIR, f"latest_{seq:06d}.mp3")
+
+
+def _cleanup_old(keep: int = MAX_KEEP_FILES) -> None:
+    try:
+        files = sorted(Path(OUTPUT_DIR).glob("latest_*.mp3"))
+        for f in files[:-keep]:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass
+
 
 def _worker() -> None:
-    Path(OUTPUT_PATH).parent.mkdir(parents=True, exist_ok=True)
+    global _current_seq, _current_path
+    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+
+    legacy_path = os.path.join(OUTPUT_DIR, "latest.mp3")
+
     while True:
         try:
             text = _task_queue.get()
@@ -40,8 +65,29 @@ def _worker() -> None:
                 break
             if not _HAS_EDGE_TTS:
                 continue
+
+            with _seq_lock:
+                _current_seq += 1
+                seq = _current_seq
+
+            out_path = _seq_path(seq)
             communicate = edge_tts.Communicate(text, VOICE)
-            asyncio.run(communicate.save(OUTPUT_PATH))
+            asyncio.run(communicate.save(out_path))
+
+            with _seq_lock:
+                _current_path = out_path
+
+            try:
+                if os.path.exists(legacy_path) or not os.path.islink(legacy_path):
+                    if os.path.exists(legacy_path):
+                        os.remove(legacy_path)
+                import shutil
+                shutil.copy2(out_path, legacy_path)
+            except Exception:
+                pass
+
+            _cleanup_old()
+
         except Exception as e:
             print(f"[TTS] Error: {e}")
         finally:
@@ -83,5 +129,17 @@ def enqueue(text: str) -> bool:
         return False
 
 
-def get_latest_path() -> str:
-    return OUTPUT_PATH
+def get_latest_path() -> Optional[str]:
+    """回傳最新版本化音檔路徑（或 legacy latest.mp3）。"""
+    with _seq_lock:
+        if _current_path and os.path.exists(_current_path):
+            return _current_path
+    legacy = os.path.join(OUTPUT_DIR, "latest.mp3")
+    if os.path.exists(legacy):
+        return legacy
+    return None
+
+
+def get_current_seq() -> int:
+    with _seq_lock:
+        return _current_seq
