@@ -6,7 +6,7 @@ description: "WHAT: 在執行任務前，強制先刷新並檢視遠端 blind-gl
 # Auto-Sync & Inspect Repo Protocol
 
 ## Objective
-為了避免因為韌體 (Firmware) 或其他相關端點有更新，導致我們開發的 App 發生規格不一致的情形。每次執行任務前，必須先自動從遠端確認 `https://github.com/YuQian081122/blind-glasses` 的最新狀況。
+為了避免因為韌體 (Firmware) 或其他相關端點有更新，導致我們開發的 App 發生規格不一致的情形。每次執行任務前，必須先自動從遠端確認 <https://github.com/YuQian081122/blind-glasses-firmware> 的最新狀況。
 
 ## Execution Steps
 

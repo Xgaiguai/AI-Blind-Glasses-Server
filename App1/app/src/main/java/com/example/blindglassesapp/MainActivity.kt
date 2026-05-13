@@ -81,147 +81,319 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var tts: android.speech.tts.TextToSpeech? = null
+    private var currentRole: String = "SELECTION"
+    private val ttsHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingTtsRunnable: Runnable? = null
+
+    // Helper function to convert DP to Pixels
+    private fun Int.dp(): Int {
+        return (this * resources.displayMetrics.density).toInt()
+    }
+
+    // Helper function for TTS voice feedback
+    private fun speak(text: String) {
+        // 取消任何待播報的延遲語音
+        pendingTtsRunnable?.let { ttsHandler.removeCallbacks(it) }
+        tts?.stop()
+        tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, null)
+    }
+
+    // 延遲播報 (可取消)
+    private fun speakDelayed(text: String, delayMs: Long) {
+        pendingTtsRunnable?.let { ttsHandler.removeCallbacks(it) }
+        pendingTtsRunnable = Runnable { speak(text) }
+        ttsHandler.postDelayed(pendingTtsRunnable!!, delayMs)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Initialize TTS
+        tts = android.speech.tts.TextToSpeech(this) { status ->
+            if (status != android.speech.tts.TextToSpeech.ERROR) {
+                tts?.language = java.util.Locale.CHINESE
+            }
+        }
 
         val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
         bluetoothLeScanner = bluetoothAdapter?.bluetoothLeScanner
 
-        // --- Status Dashboard ---
+        // 初始畫面
+        showRoleSelection()
+    }
+
+    override fun onDestroy() {
+        pendingTtsRunnable?.let { ttsHandler.removeCallbacks(it) }
+        tts?.stop()
+        tts?.shutdown()
+        super.onDestroy()
+    }
+
+    private fun showRoleSelection() {
+        currentRole = "SELECTION"
+        
+        // 使用可取消的延遲播報，切換頁面時會自動中斷
+        speakDelayed("歡迎使用智慧導盲眼鏡。長按螢幕任何地方進入配戴者模式，或點擊按鈕進入家屬模式。", 1500)
+
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(20.dp(), 20.dp(), 20.dp(), 20.dp())
+            setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
+            // 盲人長按螢幕任何地方即可進入配戴者模式
+            isClickable = true
+            isFocusable = true
+            setOnLongClickListener {
+                speak("進入配戴者模式")
+                showBlindUserView()
+                true
+            }
+        }
+
+        val title = android.widget.TextView(this).apply {
+            text = "請選擇使用身分"
+            textSize = 28f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 40.dp())
+            setTextColor(android.graphics.Color.BLACK)
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+
+        val btnParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(20.dp(), 10.dp(), 20.dp(), 10.dp()) }
+
+        val caregiverButton = Button(this).apply {
+            text = "我是家屬 / 照顧者"
+            textSize = 20f
+            setPadding(0, 25.dp(), 0, 25.dp())
+            setOnClickListener { showCaregiverView() }
+        }
+
+        val blindUserButton = Button(this).apply {
+            text = "我是眼鏡配戴者"
+            textSize = 20f
+            setPadding(0, 25.dp(), 0, 25.dp())
+            setOnClickListener { showBlindUserView() }
+        }
+
+        rootLayout.addView(title)
+        rootLayout.addView(caregiverButton, btnParams)
+        rootLayout.addView(blindUserButton, btnParams)
+
+        setContentView(rootLayout)
+    }
+
+    private fun showCaregiverView() {
+        currentRole = "CAREGIVER"
+        val scrollView = android.widget.ScrollView(this)
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20.dp(), 40.dp(), 20.dp(), 40.dp())
+        }
+
+        // --- 1. 狀態監控區 ---
         val statusCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 40)
+            setPadding(20.dp(), 20.dp(), 20.dp(), 20.dp())
             setBackgroundResource(android.R.drawable.dialog_holo_light_frame)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(20, 20, 20, 40) }
+            ).apply { setMargins(10.dp(), 10.dp(), 10.dp(), 20.dp()) }
         }
 
         connectionStatusText = android.widget.TextView(this).apply {
-            text = "連線狀態: 未連線"
+            text = if (bluetoothGatt != null) "連線狀態: 已連線" else "連線狀態: 未連線"
             textSize = 18f
-            setTextColor(android.graphics.Color.RED)
-            setPadding(0, 0, 0, 10)
+            setTextColor(if (bluetoothGatt != null) android.graphics.Color.parseColor("#4CAF50") else android.graphics.Color.RED)
+            setPadding(0, 0, 0, 8.dp())
         }
-
-        batteryStatusText = android.widget.TextView(this).apply {
-            text = "電量: --%"
-            textSize = 16f
-            setPadding(0, 5, 0, 5)
-        }
-
-        wifiStatusText = android.widget.TextView(this).apply {
-            text = "網路: 未知"
-            textSize = 16f
-            setPadding(0, 5, 0, 5)
-        }
+        batteryStatusText = android.widget.TextView(this).apply { text = "電量: --%"; textSize = 16f }
+        wifiStatusText = android.widget.TextView(this).apply { text = "網路: 未知"; textSize = 16f }
 
         statusCard.addView(connectionStatusText)
         statusCard.addView(batteryStatusText)
         statusCard.addView(wifiStatusText)
 
+        // --- 2. 影像監控區 ---
         val liveViewButton = Button(this).apply {
-            text = "查看即時畫面"
-            textSize = 24f
+            text = "查看眼鏡即時畫面"
+            textSize = 18f
             setOnClickListener {
                 if (!lastEsp32Ip.isNullOrEmpty() && lastEsp32Ip != "0.0.0.0") {
                     val url = "http://$lastEsp32Ip:81/stream"
-                    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                    startActivity(intent)
+                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
                 } else {
-                    Toast.makeText(this@MainActivity, "尚未取得眼鏡 IP，請確認眼鏡已連上 WiFi", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "尚未取得 IP", Toast.LENGTH_SHORT).show()
                 }
             }
         }
 
+        // --- 3. 系統設定區 (標題) ---
+        val setupTitle = android.widget.TextView(this).apply {
+            text = "系統設定"
+            textSize = 18f
+            setPadding(15.dp(), 20.dp(), 0, 10.dp())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+
+        val btnParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(15.dp(), 5.dp(), 15.dp(), 5.dp()) }
+
         val scanButton = Button(this).apply {
-            text = "連接眼鏡藍芽"
-            textSize = 24f
-            setOnClickListener {
-                checkPermissionsAndScan()
-            }
+            text = "1. 連接眼鏡藍牙"
+            textSize = 16f
+            setOnClickListener { checkPermissionsAndScan() }
         }
-
         val wifiButton = Button(this).apply {
-            text = "設定眼鏡網路"
-            textSize = 24f
-            setOnClickListener {
-                val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
-                startActivity(intent)
-            }
+            text = "2. 設定眼鏡 WiFi"
+            textSize = 16f
+            setOnClickListener { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }
         }
-
         val modeButton = Button(this).apply {
-            text = "設定眼鏡模式"
-            textSize = 24f
-            setOnClickListener {
-                showModeSettingDialog()
-            }
+            text = "3. 切換眼鏡模式"
+            textSize = 16f
+            setOnClickListener { showModeSettingDialog() }
         }
 
-        val volumeButton = Button(this).apply {
-            text = "設定眼鏡音量"
-            textSize = 24f
-            setOnClickListener {
-                showVolumeSettingDialog()
-            }
+        // --- 4. 輔助功能區 ---
+        val helperTitle = android.widget.TextView(this).apply {
+            text = "輔助工具"
+            textSize = 18f
+            setPadding(15.dp(), 20.dp(), 0, 10.dp())
+            setTypeface(null, android.graphics.Typeface.BOLD)
         }
 
         val findMeButton = Button(this).apply {
-            text = "尋找眼鏡 (發出聲響)"
-            textSize = 24f
+            text = "尋找眼鏡 (發聲)"
+            textSize = 18f
             setTextColor(android.graphics.Color.WHITE)
-            setBackgroundColor(android.graphics.Color.parseColor("#FF9800")) // 橘色醒目
+            setBackgroundColor(android.graphics.Color.parseColor("#FF9800"))
+            setOnClickListener { sendFindMeRequest() }
+        }
+
+        val backButton = Button(this).apply {
+            text = "← 返回身分選擇"
+            textSize = 14f
+            setOnClickListener { showRoleSelection() }
+        }
+
+        // 組裝家屬頁面
+        container.addView(statusCard)
+        container.addView(liveViewButton, btnParams)
+        container.addView(setupTitle)
+        container.addView(scanButton, btnParams)
+        container.addView(wifiButton, btnParams)
+        container.addView(modeButton, btnParams)
+        container.addView(helperTitle)
+        container.addView(findMeButton, btnParams)
+        container.addView(backButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { 
+            gravity = Gravity.CENTER_HORIZONTAL
+            setMargins(0, 40.dp(), 0, 0)
+        })
+
+        scrollView.addView(container)
+        setContentView(scrollView)
+    }
+
+    private fun showBlindUserView() {
+        currentRole = "BLIND"
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(20.dp(), 20.dp(), 20.dp(), 20.dp())
+            setBackgroundColor(android.graphics.Color.BLACK)
+            // 新增：全螢幕長按觸發尋找眼鏡
+            isClickable = true
+            isFocusable = true
+            setOnLongClickListener {
+                speak("正在尋找眼鏡")
+                sendFindMeRequest()
+                true
+            }
+        }
+
+        val isConnected = bluetoothGatt != null
+        val statusStr = if (isConnected) "眼鏡已連線" else "眼鏡未連線"
+
+        // 進入頁面主動報讀
+        speak("您已進入配戴者模式。目前$statusStr。長按螢幕任何地方即可尋找眼鏡。")
+
+        val statusText = android.widget.TextView(this).apply {
+            text = statusStr
+            textSize = 34f
+            setTextColor(if (isConnected) android.graphics.Color.GREEN else android.graphics.Color.RED)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 40.dp())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+
+        val findMeButton = Button(this).apply {
+            text = "尋找眼鏡\n(發出聲音)"
+            textSize = 36f
+            setTextColor(android.graphics.Color.BLACK)
+            setBackgroundColor(android.graphics.Color.YELLOW)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                180.dp()
+            ).apply { setMargins(20.dp(), 0, 20.dp(), 20.dp()) }
+            
             setOnClickListener {
+                speak("正在尋找眼鏡")
                 sendFindMeRequest()
             }
         }
 
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            
-            // 增加上方 padding 避免被手機狀態列 (時間、電量) 遮擋
-            val density = resources.displayMetrics.density
-            val topPadding = (60 * density).toInt() 
-            setPadding(20, topPadding, 20, 40)
-            
-            addView(statusCard)
-            addView(liveViewButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(40, 0, 40, 50) })
-            
-            addView(scanButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(40, 0, 40, 50) })
-
-            addView(wifiButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(40, 0, 40, 50) })
-
-            addView(modeButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(40, 0, 40, 50) })
-
-            addView(volumeButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(40, 0, 40, 50) })
-
-            addView(findMeButton, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(40, 30, 40, 50) })
+        val volumeButton = Button(this).apply {
+            text = "調整眼鏡音量"
+            textSize = 24f
+            setTextColor(android.graphics.Color.WHITE)
+            setBackgroundColor(android.graphics.Color.parseColor("#2196F3"))
+            setPadding(0, 20.dp(), 0, 20.dp())
+            setOnClickListener { 
+                speak("開啟音量設定")
+                showVolumeSettingDialog() 
+            }
+            contentDescription = "調整眼鏡音量按鈕"
         }
 
-        setContentView(layout)
+        val backButton = Button(this).apply {
+            text = "切換身分"
+            textSize = 18f
+            setTextColor(android.graphics.Color.WHITE)
+            setBackgroundColor(android.graphics.Color.DKGRAY)
+            setPadding(30.dp(), 15.dp(), 30.dp(), 15.dp())
+            setOnClickListener { 
+                speak("返回身分選擇")
+                showRoleSelection() 
+            }
+        }
+
+        rootLayout.addView(statusText)
+        rootLayout.addView(findMeButton)
+        rootLayout.addView(volumeButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(20.dp(), 0, 20.dp(), 50.dp()) })
+        
+        rootLayout.addView(backButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = Gravity.CENTER_HORIZONTAL })
+
+        setContentView(rootLayout)
     }
+
+
 
     private fun checkPermissionsAndScan() {
         val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

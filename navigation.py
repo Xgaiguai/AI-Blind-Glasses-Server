@@ -1,8 +1,5 @@
-"""
-連續導航：start_navigation_to_home、stop_navigation、tick_navigation。
-支援 next-step 推進、偏航重規劃、到點判定。
-"""
-
+import json
+import os
 import math
 import time
 from typing import Callable, Optional
@@ -10,6 +7,23 @@ from typing import Callable, Optional
 import config
 from directions_client import get_route
 from navigation_state import NavState, get_nav_session
+
+HOME_LOCATION_FILE = os.path.join(os.path.dirname(__file__), "home_location.json")
+
+def load_home_location():
+    """從 JSON 檔案載入住家位置，若無則回傳 config 預設值。"""
+    if os.path.exists(HOME_LOCATION_FILE):
+        try:
+            with open(HOME_LOCATION_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                lat = data.get("lat")
+                lng = data.get("lng")
+                if lat is not None and lng is not None:
+                    return float(lat), float(lng)
+        except Exception:
+            pass
+    # Fallback to config
+    return getattr(config, "HOME_LAT", 25.0), getattr(config, "HOME_LNG", 121.5)
 
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -39,20 +53,25 @@ def start_navigation_to_home(
         tts_enqueue_fn("目前無法取得位置，請稍後再試。")
         session.set_last_tts("目前無法取得位置，請稍後再試。")
         return False
+    
     origin_lat = gps["lat"]
     origin_lng = gps["lng"]
-    home_lat = getattr(config, "HOME_LAT", 25.0)
-    home_lng = getattr(config, "HOME_LNG", 121.5)
+    
+    # --- 動態載入住家位置 ---
+    home_lat, home_lng = load_home_location()
+    
     api_key = getattr(config, "GOOGLE_MAPS_API_KEY", "")
     if not api_key:
         tts_enqueue_fn("尚未設定地圖金鑰，無法導航。")
         session.set_last_tts("尚未設定地圖金鑰，無法導航。")
         return False
+        
     summary, steps_list = get_route(origin_lat, origin_lng, home_lat, home_lng, api_key=api_key)
     if not steps_list:
         tts_enqueue_fn("無法規劃回家路線。")
         session.set_last_tts("無法規劃回家路線。")
         return False
+        
     dist_to_home = _haversine_m(origin_lat, origin_lng, home_lat, home_lng)
     session.set_steps(steps_list, dist_to_home=dist_to_home)
     session.set_state(NavState.NAVIGATING)
@@ -74,6 +93,7 @@ def start_navigation_to_home(
         notify_msg = (
             f"【系統通知】\n"
             f"使用者已主動啟動「導航回家」。\n"
+            f"目標：{home_lat:.5f}, {home_lng:.5f}\n"
             f"預估步行距離約 {int(route_dist)} 公尺。\n"
             f"(家屬可輸入「位置」或「狀態」持續關注)"
         )
@@ -111,11 +131,14 @@ def tick_navigation(
         return
     lat = gps["lat"]
     lng = gps["lng"]
-    home_lat = getattr(config, "HOME_LAT", 25.0)
-    home_lng = getattr(config, "HOME_LNG", 121.5)
+    
+    # --- 動態載入住家位置 ---
+    home_lat, home_lng = load_home_location()
+    
     arrival_radius = getattr(config, "NAV_ARRIVAL_RADIUS_M", 25.0)
     reroute_min_sec = getattr(config, "NAV_REROUTE_MIN_SEC", 30.0)
     dist_to_home = _haversine_m(lat, lng, home_lat, home_lng)
+    
     if dist_to_home <= arrival_radius:
         session.set_state(NavState.ARRIVED)
         session.clear_route()
@@ -123,6 +146,7 @@ def tick_navigation(
         tts_enqueue_fn(text)
         session.set_last_tts(text)
         return
+        
     next_step = session.get_next_step()
     if not next_step:
         return
@@ -149,3 +173,4 @@ def tick_navigation(
     # 重規劃節流：僅在可重規劃時考慮（此處簡化，不實作偏航偵測，由外部依需要觸發）
     if state == NavState.REROUTING and session.can_reroute(reroute_min_sec):
         session.set_state(NavState.NAVIGATING)
+

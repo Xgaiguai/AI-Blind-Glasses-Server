@@ -12,7 +12,7 @@ description: "WHAT: 提供前端依賴的 firmware 與 API 事實查證流程，
 
 # Source of Truth
 - 優先依據本地實際程式碼 (Workspace 內的 codebase)
-- Firmware Repo URL: https://github.com/YuQian081122/blind-glasses/tree/main/firmware
+- Firmware Repo URL: <https://github.com/YuQian081122/blind-glasses-firmware>
 
 # Capability Matrix
 - BLE 快速連線：支援指令傳遞與快速狀態交換（不包含耳機音訊串流）。
