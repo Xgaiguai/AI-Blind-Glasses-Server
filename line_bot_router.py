@@ -96,8 +96,8 @@ def handle_message(event):
                 map_url = f"https://www.google.com/maps?q={gps_last_known['lat']},{gps_last_known['lng']}"
                 res = (
                     "【位置資訊】\n"
-                    "⚠️ 目前設備可能處於室內或遮蔽處，暫無即時訊號。\n"
-                    f"📍 這是設備在 {age_min} 分鐘前最後回報的位置：\n{map_url}"
+                    "目前設備可能處於室內或遮蔽處，暫無即時訊號。\n"
+                    f"這是設備在 {age_min} 分鐘前最後回報的位置：\n{map_url}"
                 )
             else:
                 res = "【系統警告】\n目前無法取得有效 GPS 訊號 (超過 15 分鐘未更新)。請確認使用者是否處於室內，或嘗試直接聯絡使用者。"
@@ -107,7 +107,7 @@ def handle_message(event):
     elif "拍攝畫面" in msg or "眼鏡畫面" in msg or "看看" in msg or "環境" in msg:
         frame = main._get_latest_frame_bytes()
         if not frame:
-            res = "【系統警告】\n⚠️ 眼鏡鏡頭目前無畫面回傳，可能是設備已待機或網路訊號不佳。"
+            res = "【系統警告】\n眼鏡鏡頭目前無畫面回傳，可能是設備已待機或網路訊號不佳。"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
         else:
             image_url = f"{NGROK_BASE_URL}/api/line_snapshot?t={int(time.time())}"
@@ -139,15 +139,15 @@ def handle_message(event):
         battery_str = "未知 (待韌體更新支援)"
         
         if imu_age is None:
-            conn_status = "🔴 設備尚未連線 (或正在重新啟動)"
+            conn_status = "設備尚未連線 (或正在重新啟動)"
         elif imu_age > 30:
             minutes = int(imu_age // 60)
             if minutes > 0:
-                conn_status = f"🔴 設備已離線 (最後連線: {minutes} 分鐘前)"
+                conn_status = f"設備已離線 (最後連線: {minutes} 分鐘前)"
             else:
-                conn_status = "🔴 設備已離線 (最後連線: 剛剛)"
+                conn_status = "設備已離線 (最後連線: 剛剛)"
         else:
-            conn_status = "🟢 正常運作中"
+            conn_status = "正常運作中"
 
         res = (
             "【設備狀態檢測】\n"
@@ -160,7 +160,7 @@ def handle_message(event):
         if last_error:
             res += f"- 最近系統警告：{last_error}\n"
 
-        if conn_status.startswith("🟢"):
+        if conn_status.startswith("正常"):
             res += "\n系統診斷結果：設備運作正常。"
         else:
             res += "\n【系統診斷警告】設備離線，請嘗試聯繫使用者確認安全。"
@@ -172,7 +172,7 @@ def handle_message(event):
         if current_address:
             res = (
                 "【系統提示】\n"
-                f"您目前已設定的住家位置為：\n📍 {current_address}\n\n"
+                f"您目前已設定的住家位置為：\n{current_address}\n\n"
                 "若要「更改」住家座標，請直接在 LINE 的輸入框點擊「＋」，選擇「位置資訊」，"
                 "然後選取您的新住家地址並送出即可。"
             )

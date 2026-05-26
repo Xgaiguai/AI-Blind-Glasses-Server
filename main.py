@@ -785,6 +785,29 @@ async def api_imu(request: Request) -> dict:
     return {"ok": True}
 
 
+_current_device_status: dict = {}
+
+@app.post("/api/status")
+async def api_post_status(request: Request) -> dict:
+    """接收來自配戴者 App 轉發的藍牙設備狀態。"""
+    global _current_device_status
+    try:
+        _current_device_status = await request.json()
+    except Exception:
+        pass
+    return {"status": "success"}
+
+@app.get("/api/status")
+async def api_get_status() -> dict:
+    """提供家屬端 App 取得最新設備狀態與 GPS。"""
+    resp = dict(_current_device_status)
+    # 把伺服器接收到的最新 ESP32 GPS 一併塞進去回傳
+    with _gps_lock:
+        if _last_gps:
+            resp["gps"] = _last_gps
+    return resp
+
+
 def _update_last_gps(
     lat: float,
     lng: float,
