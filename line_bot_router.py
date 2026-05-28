@@ -70,7 +70,19 @@ def handle_message(event):
     import main
 
     msg = event.message.text.strip()
-    print(f"DEBUG: 收到來自 LINE 的訊息 -> |{msg}|")
+    user_id = getattr(event.source, "user_id", "")
+    print(f"DEBUG: 收到來自 LINE 的訊息 -> |{msg}| (來自 ID: {user_id})")
+
+    if msg.lower() in ["id", "我的id", "userid", "user_id", "my id"]:
+        res = (
+            "【您的 LINE User ID】\n"
+            f"您的唯一識別碼為：\n{user_id}\n\n"
+            "請將此 ID 複製並填入伺服器目錄下的 .env 檔案中。\n"
+            "例如：\n"
+            f"LINE_TARGET_IDS=\"{user_id}\""
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res))
+        return
 
     help_text = (
         "【智慧導盲眼鏡 系統選單】\n"

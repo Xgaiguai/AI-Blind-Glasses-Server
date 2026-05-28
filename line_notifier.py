@@ -93,6 +93,39 @@ class LineNotifier:
                 errors.append(f"{to}:{e}")
         return {"ok": ok_count > 0, "sent": ok_count, "errors": errors}
 
+    def push_text_and_location(self, text: str, title: str, address: str, lat: float, lng: float) -> Dict[str, Any]:
+        if not self.is_ready():
+            return {"ok": False, "reason": "line_not_ready"}
+        ok_count = 0
+        errors: List[str] = []
+        for to in self.targets:
+            payload = {
+                "to": to,
+                "messages": [
+                    {
+                        "type": "text",
+                        "text": text,
+                    },
+                    {
+                        "type": "location",
+                        "title": title,
+                        "address": address,
+                        "latitude": float(lat),
+                        "longitude": float(lng),
+                    }
+                ],
+            }
+            try:
+                r = requests.post(self.PUSH_API, headers=self._headers(), json=payload, timeout=self.timeout)
+                if 200 <= r.status_code < 300:
+                    ok_count += 1
+                else:
+                    errors.append(f"{to}:{r.status_code}")
+            except Exception as e:
+                errors.append(f"{to}:{e}")
+        return {"ok": ok_count > 0, "sent": ok_count, "errors": errors}
+
+
     def reply_text(
         self,
         reply_token: str,

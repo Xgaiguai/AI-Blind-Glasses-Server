@@ -10,6 +10,7 @@ object FamilyEndpoints {
     const val STREAM = "$BASE/stream"
     const val MONITOR_PAGE = "$BASE/monitor"
     const val HEALTH = "$BASE/health"
+    const val EMERGENCY = "$BASE/api/family/emergency"
 
     const val WS_VIEWER = "wss://www.blind-glasses.org/ws/viewer"
     const val WS_UI = "wss://www.blind-glasses.org/ws_ui"

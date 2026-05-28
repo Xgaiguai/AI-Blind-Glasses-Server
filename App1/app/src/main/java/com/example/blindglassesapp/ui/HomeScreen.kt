@@ -346,7 +346,7 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.White.copy(alpha = 0.7f),
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp).padding(bottom = 8.dp),
+                        modifier = Modifier. padding(horizontal = 32.dp).padding(bottom = 8.dp),
                     )
                 }
             }

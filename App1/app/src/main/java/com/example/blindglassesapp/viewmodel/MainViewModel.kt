@@ -6,14 +6,25 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.blindglassesapp.ble.BleConnectionState
 import com.example.blindglassesapp.ble.BleManager
+import com.example.blindglassesapp.network.EmergencyRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
+/** 緊急求助的狀態。 */
+enum class EmergencyState {
+    IDLE,    // 尚未觸發
+    SENDING, // 發送中
+    SENT,    // 已成功通知家屬
+    FAILED   // 發送失敗
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val bleManager = BleManager(application)
+    private val emergencyRepository = EmergencyRepository()
 
     val bleState: StateFlow<BleConnectionState> = bleManager.state
     val writeResult: StateFlow<BleManager.WriteResult?> = bleManager.writeResult
@@ -106,6 +117,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerCloseAccessibilityMode() {
         viewModelScope.launch { _closeAccessibilityEvent.emit(Unit) }
+    }
+
+    // ── 緊急求助 ──
+    private val _emergencyState = MutableStateFlow(EmergencyState.IDLE)
+    val emergencyState: StateFlow<EmergencyState> = _emergencyState
+
+    /**
+     * 發送緊急求助到伺服器（伺服器會 LINE 推播家屬 + GPS 位置）。
+     * UI 層可透過 [emergencyState] 觀察結果，提供 TTS 回饋。
+     */
+    fun sendEmergency() {
+        if (_emergencyState.value == EmergencyState.SENDING) return // 防止重複發送
+        _emergencyState.value = EmergencyState.SENDING
+        viewModelScope.launch {
+            val ok = emergencyRepository.sendEmergency()
+            _emergencyState.value = if (ok) EmergencyState.SENT else EmergencyState.FAILED
+        }
+    }
+
+    /** 重設緊急狀態為 IDLE（允許再次觸發）。 */
+    fun resetEmergencyState() {
+        _emergencyState.value = EmergencyState.IDLE
     }
 
     override fun onCleared() {

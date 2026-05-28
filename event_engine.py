@@ -49,7 +49,7 @@ class EventEngine:
         if bool(getattr(config, "FALL_ENABLE", True)) and fall_state.get("triggered"):
             notify_event = {
                 "type": "fall_alert",
-                "text": "警示：偵測到疑似跌倒，請盡快確認眼鏡使用者狀況。",
+                "text": "【安全警報】智慧眼鏡偵測到家人疑似跌倒且無回應，請立即確認安全！",
                 "payload": {
                     "fall": fall_state,
                     "gps": self._last_gps,
@@ -62,7 +62,7 @@ class EventEngine:
         now = time.time()
         event = {
             "type": "emergency",
-            "text": "緊急通知：眼鏡端觸發緊急求助。",
+            "text": "【緊急通報】您的家人觸發了智慧眼鏡的緊急求助，請立刻確認其安全！",
             "payload": {"note": note, "gps": self._last_gps},
             "ts": now,
         }

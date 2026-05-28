@@ -22,6 +22,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.blindglassesapp.ble.BleConnectionState
 import com.example.blindglassesapp.tts.TtsManager
+import com.example.blindglassesapp.viewmodel.EmergencyState
 import com.example.blindglassesapp.viewmodel.MainViewModel
 
 /**
@@ -51,6 +52,7 @@ fun AccessibilityScreen(
     val volume by viewModel.currentVolume.collectAsState()
     val isConnected = bleState is BleConnectionState.Connected
     val isVolumeActive by viewModel.isVolumeAdjustmentActive.collectAsState()
+    val emergencyState by viewModel.emergencyState.collectAsState()
 
     val view = LocalView.current
 
@@ -108,6 +110,22 @@ fun AccessibilityScreen(
         }
     }
 
+    // ── 監聽緊急求助狀態，播報 TTS 回饋 ──
+    LaunchedEffect(emergencyState) {
+        when (emergencyState) {
+            EmergencyState.SENDING -> ttsManager.speak("正在發送緊急求助，請稍候")
+            EmergencyState.SENT -> {
+                ttsManager.speak("已成功通知家屬，請留在安全處並保持通訊")
+                viewModel.resetEmergencyState()
+            }
+            EmergencyState.FAILED -> {
+                ttsManager.speak("通知失敗，請重試或直接撥打電話")
+                viewModel.resetEmergencyState()
+            }
+            EmergencyState.IDLE -> { /* 無需播報 */ }
+        }
+    }
+
     // ── 合併後的功能清單 (allFeatures) ──
     val allFeatures = remember(isConnected, volume) {
         listOf(
@@ -154,8 +172,8 @@ fun AccessibilityScreen(
             AccessibilityFeature("文字閱讀") {
                 ttsManager.speak("啟動文字閱讀")
             },
-            AccessibilityFeature("警報模式") {
-                ttsManager.speak("發出警報")
+            AccessibilityFeature("緊急求助") {
+                viewModel.sendEmergency()
             }
         )
     }

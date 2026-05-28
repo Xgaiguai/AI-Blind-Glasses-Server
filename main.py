@@ -231,28 +231,34 @@ def _request_scene_desc(mode: str = "general") -> None:
     tts_enqueue(text)
 
 
-def _notify_family_text(text: str) -> None:
-    try:
-        _line_notifier.push_text(text)
-    except Exception:
-        pass
-
-
-def _notify_family_location() -> None:
+def _notify_family_event(text: str, event_type: str = "emergency") -> None:
     gps = _event_engine.get_snapshot().get("last_gps") or {}
     lat = gps.get("lat")
     lng = gps.get("lng")
-    if lat is None or lng is None:
-        return
-    try:
-        _line_notifier.push_location(
-            title="眼鏡目前位置",
-            address=gps.get("map_url") or "Google Maps",
-            lat=float(lat),
-            lng=float(lng),
-        )
-    except Exception:
-        pass
+    
+    if event_type == "fall":
+        title = "家人智慧眼鏡：疑似跌倒定位"
+        address = "請點擊此處查看家人的即時地圖位置與導航。"
+    else:
+        title = "家人智慧眼鏡：緊急求助定位"
+        address = "請點擊此處查看家人的即時地圖位置與導航。"
+
+    if lat is not None and lng is not None:
+        try:
+            _line_notifier.push_text_and_location(
+                text=text,
+                title=title,
+                address=address,
+                lat=float(lat),
+                lng=float(lng),
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            _line_notifier.push_text(text)
+        except Exception:
+            pass
 
 
 def _build_family_status_text() -> str:
@@ -295,8 +301,7 @@ def _handle_voice_distress() -> None:
         msg = "【語音緊急】使用者透過眼鏡表達需要協助，請儘速聯繫確認安全。"
         if note:
             msg += f"\n（語音轉寫：{note[:120]}{'…' if len(note) > 120 else ''}）"
-        _notify_family_text(msg)
-        _notify_family_location()
+        _notify_family_event(text=msg, event_type="emergency")
     tts_enqueue("我已嘗試通知您的家屬，請留在相對安全處並保持通訊。")
 
 
@@ -777,8 +782,10 @@ async def api_imu(request: Request) -> dict:
         ev = _event_engine.update_imu(data)
         notify_event = ev.get("notify_event")
         if notify_event and _event_engine.should_send_line():
-            _notify_family_text(str(notify_event.get("text") or "警示：偵測到異常事件。"))
-            _notify_family_location()
+            _notify_family_event(
+                text=str(notify_event.get("text") or "警示：偵測到異常事件。"),
+                event_type="fall"
+            )
     except Exception as e:
         _server_health.set_error(f"imu:{e}")
         pass
@@ -882,8 +889,10 @@ async def api_family_emergency(request: Request) -> dict:
     ev = _event_engine.emergency_event(note)
     sent = False
     if _event_engine.should_send_line():
-        _notify_family_text(str(ev.get("text") or "緊急通知"))
-        _notify_family_location()
+        _notify_family_event(
+            text=str(ev.get("text") or "緊急通知：眼鏡端觸發緊急求助。"),
+            event_type="emergency"
+        )
         sent = True
     return {"ok": True, "sent": sent, "event": ev}
 
