@@ -1,6 +1,7 @@
 package com.example.blindglassesapp.ui
 
 import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -55,6 +56,14 @@ fun AccessibilityScreen(
     val emergencyState by viewModel.emergencyState.collectAsState()
 
     val view = LocalView.current
+
+    // ── 實體返回鍵處理 ──
+    BackHandler {
+        ttsManager.stop()
+        viewModel.setVolumeAdjustmentActive(false)
+        ttsManager.speak("已退出盲人模式")
+        onBack()
+    }
 
     // ── 保留的沉浸模式邏輯 ──
     // 進入頁面時自動隱藏導覽列與狀態列（進入沉浸模式，防誤觸）
@@ -153,26 +162,17 @@ fun AccessibilityScreen(
                     ttsManager.speak("眼鏡尚未連線")
                 }
             },
-            AccessibilityFeature("查詢電量") {
-                ttsManager.speak("電量百分之百") // 之後可串接真實 API
-            },
-            AccessibilityFeature("查詢時間") {
-                ttsManager.speak("現在時間") // 之後可串接系統時間
+            AccessibilityFeature("查詢眼鏡電量") {
+                ttsManager.speak("眼鏡電量百分之百") // 之後可串接真實 API
             },
             // 原 horizontalFeatures (5 個)
             AccessibilityFeature("環境描述") {
                 ttsManager.speak("正在掃描環境") // 之後可串接相機 AI
             },
-            AccessibilityFeature("路徑導航") {
-                ttsManager.speak("準備導航") // 之後可串接地圖 API
+            AccessibilityFeature("導航回家") {
+                ttsManager.speak("準備導航回家") // 之後可串接地圖 API
             },
-            AccessibilityFeature("人臉辨識") {
-                ttsManager.speak("啟動人臉辨識")
-            },
-            AccessibilityFeature("文字閱讀") {
-                ttsManager.speak("啟動文字閱讀")
-            },
-            AccessibilityFeature("緊急求助") {
+            AccessibilityFeature("緊急求助(測試用)") {
                 viewModel.sendEmergency()
             }
         )
@@ -294,6 +294,7 @@ fun AccessibilityScreen(
                                     onClick(label = "執行${feature.name}功能") { true }
                                 },
                             shape = MaterialTheme.shapes.large,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             colors = ButtonDefaults.filledTonalButtonColors(
                                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -301,9 +302,11 @@ fun AccessibilityScreen(
                         ) {
                             Text(
                                 text = feature.name,
-                                fontSize = 28.sp,
+                                fontSize = 22.sp,
+                                lineHeight = 30.sp,
                                 fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center
+                                textAlign = TextAlign.Center,
+                                maxLines = 2
                             )
                         }
                     }

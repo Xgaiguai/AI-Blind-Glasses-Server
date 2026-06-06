@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>IMU 狀態測試台</title>
+  <style>
+    :root {
+      --bg: #07090c;
+      --panel: #11161d;
+      --line: #243141;
+      --text: #e7edf5;
+      --muted: #8fa0b5;
+      --ok: #3ddc97;
+      --warn: #ffd166;
+      --err: #ff6b6b;
+      --gx: #38bdf8;
+      --gy: #a78bfa;
+      --gz: #fb7185;
+      --ax: #4ade80;
+      --ay: #fbbf24;
+      --az: #f97316;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Noto Sans TC", sans-serif;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .title { font-size: 20px; font-weight: 700; }
+    .sub { color: var(--muted); font-size: 13px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 12px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #0b1118;
+    }
+    .k { color: var(--muted); font-size: 12px; }
+    .v { font-size: 18px; font-weight: 700; }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    td {
+      border-top: 1px dashed var(--line);
+      padding: 6px 2px;
+    }
+    .legend {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 99px;
+      display: inline-block;
+      margin-right: 4px;
+      transform: translateY(1px);
+    }
+    canvas {
+      width: 100%;
+      height: 220px;
+      background: #0a0f15;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: block;
+    }
+    .chart-wrap { margin-bottom: 10px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="title">IMU 狀態測試台</div>
+      <div class="sub">資料來源：`/api/monitor/state` → `fusion`（六軸：加速度、陀螺儀）</div>
+    </div>
+    <div id="conn" class="sub">連線中...</div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="stats">
+        <div class="chip">
+          <div class="k">移動狀態</div>
+          <div id="motion" class="v">-</div>
+        </div>
+        <div class="chip">
+          <div class="k">轉向狀態</div>
+          <div id="turning" class="v">-</div>
+        </div>
+        <div class="chip">
+          <div class="k">Heading</div>
+          <div id="heading" class="v mono">-</div>
+        </div>
+        <div class="chip">
+          <div class="k">IMU Age</div>
+          <div id="age" class="v mono">-</div>
+        </div>
+      </div>
+
+      <table>
+        <tr><td>Gyro X</td><td id="gx" class="mono" style="text-align:right">-</td></tr>
+        <tr><td>Gyro Y</td><td id="gy" class="mono" style="text-align:right">-</td></tr>
+        <tr><td>Gyro Z</td><td id="gz" class="mono" style="text-align:right">-</td></tr>
+        <tr><td>Acc X</td><td id="ax" class="mono" style="text-align:right">-</td></tr>
+        <tr><td>Acc Y</td><td id="ay" class="mono" style="text-align:right">-</td></tr>
+        <tr><td>Acc Z</td><td id="az" class="mono" style="text-align:right">-</td></tr>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="chart-wrap">
+        <div class="legend">
+          <span><i class="dot" style="background:var(--gx)"></i>gx</span>
+          <span><i class="dot" style="background:var(--gy)"></i>gy</span>
+          <span><i class="dot" style="background:var(--gz)"></i>gz</span>
+        </div>
+        <canvas id="gyroChart" width="900" height="220"></canvas>
+      </div>
+
+      <div class="chart-wrap">
+        <div class="legend">
+          <span><i class="dot" style="background:var(--ax)"></i>ax</span>
+          <span><i class="dot" style="background:var(--ay)"></i>ay</span>
+          <span><i class="dot" style="background:var(--az)"></i>az</span>
+        </div>
+        <canvas id="accChart" width="900" height="220"></canvas>
+      </div>
+
+      <div class="muted">最近 120 筆資料，約 20~60 秒視 IMU 上傳頻率而定。</div>
+    </div>
+  </div>
+
+  <script>
+    const MAX_POINTS = 120;
+    const POLL_MS = 250;
+
+    const el = (id) => document.getElementById(id);
+    const fmt = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "-" : Number(v).toFixed(d);
+    const zhMotion = (state, isMoving) => {
+      if (state === "moving" || isMoving === true) return "移動中";
+      return "已停止";
+    };
+    const zhTurning = (turn) => turn === "left" ? "左轉" : turn === "right" ? "右轉" : "無";
+
+    const series = {
+      gx: [], gy: [], gz: [],
+      ax: [], ay: [], az: []
+    };
+
+    function pushPoint(key, val) {
+      const arr = series[key];
+      arr.push(typeof val === "number" ? val : null);
+      if (arr.length > MAX_POINTS) arr.shift();
+    }
+
+    function drawGrid(ctx, w, h) {
+      ctx.strokeStyle = "#1d2835";
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 5; i++) {
+        const y = (h * i) / 5;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawSeries(canvasId, keys, colors) {
+      const c = el(canvasId);
+      const ctx = c.getContext("2d");
+      const w = c.width;
+      const h = c.height;
+      ctx.clearRect(0, 0, w, h);
+      drawGrid(ctx, w, h);
+
+      const values = keys.flatMap((k) => series[k]).filter((v) => typeof v === "number");
+      if (!values.length) return;
+
+      const absMax = Math.max(1, ...values.map((v) => Math.abs(v)));
+      const maxY = absMax * 1.1;
+      const minY = -maxY;
+      const toX = (i, n) => n <= 1 ? 0 : (i * (w - 1)) / (n - 1);
+      const toY = (v) => h - ((v - minY) / (maxY - minY)) * h;
+
+      // zero line
+      ctx.strokeStyle = "#304357";
+      ctx.beginPath();
+      ctx.moveTo(0, toY(0));
+      ctx.lineTo(w, toY(0));
+      ctx.stroke();
+
+      keys.forEach((k, idx) => {
+        const arr = series[k];
+        ctx.strokeStyle = colors[idx];
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < arr.length; i++) {
+          const v = arr[i];
+          if (typeof v !== "number") continue;
+          const x = toX(i, arr.length);
+          const y = toY(v);
+          if (!started) {
+            ctx.moveTo(x, y);
+            started = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+      });
+    }
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/monitor/state", { cache: "no-store" });
+        if (!res.ok) throw new Error("state fetch failed");
+        const data = await res.json();
+        const f = data.fusion || {};
+        const health = data.server_health || {};
+
+        el("motion").textContent = zhMotion(f.motion_state, f.is_moving);
+        el("motion").className = "v " + ((f.motion_state === "moving" || f.is_moving) ? "ok" : "warn");
+        el("turning").textContent = zhTurning(f.turning);
+        el("turning").className = "v " + (f.turning ? "ok" : "warn");
+        el("heading").textContent = `${fmt(f.heading_deg, 1)}°`;
+        el("age").textContent = `${fmt(health.last_imu_age_sec, 2)}s`;
+
+        ["gx", "gy", "gz", "ax", "ay", "az"].forEach((k) => {
+          el(k).textContent = fmt(f[k], 3);
+          pushPoint(k, (typeof f[k] === "number") ? f[k] : null);
+        });
+
+        drawSeries("gyroChart", ["gx", "gy", "gz"], ["#38bdf8", "#a78bfa", "#fb7185"]);
+        drawSeries("accChart", ["ax", "ay", "az"], ["#4ade80", "#fbbf24", "#f97316"]);
+        el("conn").textContent = "連線正常";
+        el("conn").style.color = "var(--ok)";
+      } catch (_) {
+        el("conn").textContent = "連線中斷";
+        el("conn").style.color = "var(--err)";
+      }
+    }
+
+    setInterval(poll, POLL_MS);
+    poll();
+  </script>
+</body>
+</html>

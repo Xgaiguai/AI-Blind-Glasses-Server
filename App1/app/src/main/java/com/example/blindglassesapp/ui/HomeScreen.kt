@@ -89,7 +89,6 @@ fun HomeScreen(
     var showDeviceSheet by remember { mutableStateOf(false) }
     var showWifiDialog by remember { mutableStateOf(false) }
     var previousBleState by remember { mutableStateOf<BleConnectionState?>(null) }
-    var showSettingsMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(bleState) {
         val prev = previousBleState
@@ -121,32 +120,12 @@ fun HomeScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "導盲眼鏡 (版本: ${BuildConfig.VERSION_NAME})",
+                        text = "導盲眼鏡",
                         style = MaterialTheme.typography.titleMedium,
                     )
                 },
-                actions = {
-                    // 設定圖示 → 點擊展開 DropdownMenu（收納 ThemePreferenceChipRow）
-                    Box {
-                        IconButton(
-                            onClick = { showSettingsMenu = true },
-                            modifier = Modifier.size(64.dp),
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = "設定",
-                            )
-                        }
-                        ThemeSettingsDropdown(
-                            expanded = showSettingsMenu,
-                            onDismiss = { showSettingsMenu = false },
-                            current = themePreference,
-                            onChange = onThemePreferenceChange,
-                        )
-                    }
-                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = Color.Transparent,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
@@ -177,10 +156,12 @@ fun HomeScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 24.dp, vertical = 20.dp),
+                        .padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 0.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
+                    Spacer(Modifier.weight(1f))
+                    
                     // ── 連線狀態中樞 Card ──
                     Card(
                         shape = RoundedCornerShape(16.dp),
@@ -192,66 +173,77 @@ fun HomeScreen(
                         ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                                .padding(top = 32.dp, bottom = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            // 左側藍牙圖示
-                            Icon(
-                                imageVector = if (isConnected)
-                                    Icons.Default.Bluetooth
-                                else
-                                    Icons.Default.BluetoothDisabled,
-                                contentDescription = if (isConnected) "已連線" else "未連線",
-                                tint = if (isConnected)
-                                    MaterialTheme.colorScheme.secondary
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                modifier = Modifier.size(40.dp),
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            Column(
-                                modifier = Modifier.weight(1f),
+                            // 主視覺圖示 (Hero Icon)
+                            Box(
+                                modifier = Modifier
+                                    .size(88.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isConnected) MaterialTheme.colorScheme.primaryContainer 
+                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                if (isConnected) {
-                                    val name = (bleState as BleConnectionState.Connected).deviceName
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(8.dp)
-                                                .clip(CircleShape)
-                                                .background(MaterialTheme.colorScheme.secondary),
-                                        )
-                                        Spacer(Modifier.width(10.dp))
-                                        Text(
-                                            text = "已連線",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.secondary,
-                                        )
-                                    }
-                                    Text(
-                                        text = name,
-                                        style = MaterialTheme.typography.titleLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.padding(top = 6.dp),
+                                Icon(
+                                    imageVector = if (isConnected)
+                                        Icons.Default.Bluetooth
+                                    else
+                                        Icons.Default.BluetoothDisabled,
+                                    contentDescription = if (isConnected) "已連線" else "未連線",
+                                    tint = if (isConnected)
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(40.dp),
+                                )
+                            }
+                            
+                            Spacer(Modifier.height(20.dp))
+                            
+                            if (isConnected) {
+                                val name = (bleState as BleConnectionState.Connected).deviceName
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary),
                                     )
-                                } else {
+                                    Spacer(Modifier.width(8.dp))
                                     Text(
-                                        text = "尚未連線",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Text(
-                                        text = "請先掃描並選擇裝置",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                        modifier = Modifier.padding(top = 6.dp),
+                                        text = "已連線",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary,
                                     )
                                 }
+                                Text(
+                                    text = name,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
+                            } else {
+                                Text(
+                                    text = "導盲眼鏡未連線",
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    text = "請開啟藍牙並連接您的設備",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
                             }
                         }
 
@@ -265,7 +257,6 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp)
                                 .padding(bottom = 16.dp)
                                 .height(56.dp)
-                                .shadow(6.dp, buttonShape)
                                 .clip(buttonShape)
                                 .background(
                                     brush = Brush.horizontalGradient(
@@ -299,29 +290,6 @@ fun HomeScreen(
                         }
                     }
 
-                    // ── 次要功能區 ──
-                    Spacer(Modifier.height(24.dp))
-
-                    OutlinedButton(
-                        onClick = onMonitorClick,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(64.dp),
-                        shape = buttonShape,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Videocam,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "即時監看",
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                    }
-
                     if (isConnected) {
                         Spacer(Modifier.height(16.dp))
                         OutlinedButton(
@@ -340,14 +308,34 @@ fun HomeScreen(
 
                     Spacer(Modifier.weight(1f))
 
-                    // ── 底部手勢提示 Footer Hint ──
-                    Text(
-                        text = "同時點按實體音量加減鍵，或長按螢幕可進入盲人輔助模式",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.7f),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier. padding(horizontal = 32.dp).padding(bottom = 8.dp),
-                    )
+                    // ── 底部手勢提示 Footer Hint (Icon-less Card) ──
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "盲人模式快捷鍵",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = "同時點按音量加減鍵，或長按螢幕即可快速進入",
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -386,34 +374,3 @@ fun HomeScreen(
     }
 }
 
-// ── 設定選單中收納主題切換 ──
-@Composable
-private fun ThemeSettingsDropdown(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    current: AppThemePreference,
-    onChange: (AppThemePreference) -> Unit,
-) {
-    androidx.compose.material3.DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        modifier = Modifier.width(200.dp),
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(
-                text = "外觀主題",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-            ThemePreferenceChipRow(
-                current = current,
-                onChange = { pref ->
-                    onChange(pref)
-                    onDismiss()
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}

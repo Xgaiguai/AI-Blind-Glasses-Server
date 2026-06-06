@@ -15,7 +15,7 @@ except ImportError:
 
 # ----- HTTP 伺服器 -----
 HTTP_HOST = os.environ.get("HTTP_HOST", "0.0.0.0")
-HTTP_PORT = int(os.environ.get("HTTP_PORT", "5000"))
+HTTP_PORT = int(os.environ.get("HTTP_PORT", "4000"))
 # Optional server IP advertised to ESP32 during UDP discovery. Useful when the
 # PC has multiple network adapters and the default route picks the wrong one.
 SERVER_IP = os.environ.get("SERVER_IP", "").strip()

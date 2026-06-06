@@ -14,15 +14,17 @@ import warnings
 import threading
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 import cv2  # type: ignore[import-untyped]
 import numpy as np  # type: ignore[import-untyped]
 import requests  # type: ignore[import-untyped]
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect  # type: ignore[import-untyped]
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse  # type: ignore[import-untyped]
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect  # type: ignore[import-untyped]
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse  # type: ignore[import-untyped]
+
+import config
 
 # Ultralytics 有時用 print / 直寫 stderr 打出「GitHub assets check failure」，logging.Filter 吃不到。
 _stderr_github_filter_installed = False
@@ -107,6 +109,31 @@ def _suppress_ultralytics_github_log_noise() -> None:
 
 _suppress_ultralytics_github_log_noise()
 
+from asr_intent import get_last_transcript
+from gemini_client import analyze_scene
+from line_gemini_chat import family_line_reply
+from line_bot_router import router as line_bot_router
+from imu_gps_fusion import get_fusion
+from intent_router import handle_asr_and_route
+from monitor_api import create_monitor_router
+from navigation import start_navigation_to_home, stop_navigation, tick_navigation
+from navigation_state import NavState, get_nav_session
+from stream_manager import stream_manager
+from traffic_crossing import get_controller
+from udp_discovery import _get_local_ip, start_udp_listener_thread
+from yolo_detector import get_detector
+from tts_queue import enqueue as tts_enqueue, get_latest_path as tts_latest_path, get_current_seq as tts_current_seq
+from vision_controller import VisionController
+from event_engine import EventEngine
+from line_notifier import LineNotifier
+from server_health import ServerHealth
+from item_search_worker import (
+    start_item_search as start_item_search_worker,
+    stop_item_search as stop_item_search_worker,
+    get_snapshot as get_item_search_snapshot,
+)
+import ws_broadcaster
+
 
 def _api_error(error: str, status_code: int, detail: Optional[str] = None):
     payload: Dict[str, object] = {"ok": False, "error": error}
@@ -144,36 +171,6 @@ def _validate_startup_config() -> None:
     if errors:
         raise RuntimeError(" ; ".join(errors))
 
-import config
-from asr_intent import get_last_transcript
-from gemini_client import analyze_scene
-from line_gemini_chat import family_line_reply
-from line_bot_router import router as line_bot_router
-from imu_gps_fusion import get_fusion
-from intent_router import handle_asr_and_route
-from monitor_api import create_monitor_router
-from navigation import start_navigation_to_home, stop_navigation, tick_navigation
-from navigation_state import NavState, get_nav_session
-from stream_manager import stream_manager
-from traffic_crossing import get_controller
-from udp_discovery import _get_local_ip, start_udp_listener_thread
-from yolo_detector import get_detector
-from tts_queue import (
-    enqueue as tts_enqueue,
-    get_latest_path as tts_latest_path,
-    get_current_seq as tts_current_seq,
-)
-from vision_controller import VisionController
-from event_engine import EventEngine
-from line_notifier import LineNotifier
-from server_health import ServerHealth
-from item_search_worker import (
-    start_item_search as start_item_search_worker,
-    stop_item_search as stop_item_search_worker,
-    get_snapshot as get_item_search_snapshot,
-)
-import ws_broadcaster
-
 # 背景 YOLO 更新之避障文字（thread-safe）
 _obstacle_lock = threading.Lock()
 _latest_obstacle_text: Optional[str] = None
@@ -205,7 +202,6 @@ _VISION_DRIVE_ENABLED = os.environ.get("ENABLE_VISION_DRIVE", "0") == "1"
 _event_engine = EventEngine()
 _line_notifier = LineNotifier()
 _server_health = ServerHealth()
-
 _asr_executor = ThreadPoolExecutor(
     max_workers=max(1, int(getattr(config, "ASR_EXECUTOR_MAX_WORKERS", 2))),
     thread_name_prefix="asr",
@@ -214,15 +210,13 @@ _gemini_executor = ThreadPoolExecutor(
     max_workers=max(1, int(getattr(config, "GEMINI_EXECUTOR_MAX_WORKERS", 2))),
     thread_name_prefix="gemini",
 )
-# 注意：使用者要求保留原本 Line 邏輯，但為了程式碼完整性我們仍保留 executor 定義但不強制切換
 _line_ai_executor = ThreadPoolExecutor(
     max_workers=max(1, int(getattr(config, "LINE_AI_EXECUTOR_MAX_WORKERS", 2))),
     thread_name_prefix="line-ai",
 )
-
 _viewer_ws_interval_sec = max(0.01, float(getattr(config, "VIEWER_WS_INTERVAL_SEC", 0.05)))
 _asr_default_async = bool(getattr(config, "ASR_DEFAULT_ASYNC", True))
-# API 併發控制：同時處理中的 ASR / Gemini 任務上限
+# 同時進行中的 ASR / Gemini 任務數上限（threading.Semaphore，避免無限制堆疊背景任務）
 _asr_job_sem = threading.Semaphore(max(1, int(getattr(config, "API_ASR_MAX_JOBS", 8))))
 _gemini_job_sem = threading.Semaphore(max(1, int(getattr(config, "API_GEMINI_MAX_JOBS", 3))))
 _asr_wait_queue_max = max(0, int(getattr(config, "ASR_WAIT_QUEUE_MAX", 4)))
@@ -244,6 +238,10 @@ _ESP32_IP_FROM_REQUEST_PATHS = frozenset(
 )
 
 
+def _should_record_esp32_ip_from_request(request: Request) -> bool:
+    return request.url.path in _ESP32_IP_FROM_REQUEST_PATHS
+
+
 _MAX_DEVICE_STREAM_URL_LEN = 512
 
 
@@ -258,6 +256,103 @@ def _safe_device_stream_url(raw: str) -> Optional[str]:
     if any(c in u for c in ("\r", "\n", "\x00")):
         return None
     return u
+
+
+def _record_esp32_ip_from_request(request: Request) -> None:
+    """從請求來源 IP 記錄 ESP32，並啟動串流拉取。"""
+    client = request.client
+    if client:
+        host = client.host
+        stream_manager.set_esp32_ip(host)
+        # 診斷：終端機若從未出現此行，代表眼鏡沒打到這台伺服器（或 IP 被記成 127.0.0.1）
+        if host not in ("127.0.0.1", "::1") and request.url.path in (
+            "/api/imu",
+            "/api/gps",
+            "/api/asr",
+        ):
+            print(f"[ESP32] 已記錄裝置 {host} ← {request.method} {request.url.path}，開始嘗試拉 MJPEG")
+
+
+def _push_voice_intent(text: str) -> None:
+    with _voice_lock:
+        _recent_voice_intents.append({"ts": str(time.time()), "text": text})
+        if len(_recent_voice_intents) > 20:
+            del _recent_voice_intents[:-20]
+
+
+def _build_asr_runner(audio_body: bytes):
+    """回傳可在 executor 內執行的同步 callable（依 bytes 綁定）。"""
+
+    def _run() -> str:
+        return handle_asr_and_route(
+            audio_body,
+            tts_enqueue_fn=tts_enqueue,
+            get_last_gps_fn=_get_last_gps,
+            request_scene_desc_fn=lambda: _request_scene_desc("general"),
+            request_traffic_light_fn=lambda: get_controller().start(),
+            start_nav_fn=lambda: start_navigation_to_home(tts_enqueue, _get_last_gps, config.LAST_GPS_MAX_AGE_SEC),
+            stop_nav_fn=lambda: stop_navigation(tts_enqueue),
+            start_item_search_fn=lambda target: _start_item_search(target or ""),
+            stop_item_search_fn=_stop_item_search,
+            on_distress_fn=_handle_voice_distress,
+            max_gps_age_sec=config.LAST_GPS_MAX_AGE_SEC,
+        )
+
+    return _run
+
+
+async def _asr_schedule_next_from_queue() -> None:
+    """非同步 ASR 槽位釋放後，自等候佇列啟動下一筆。"""
+    body: Optional[bytes] = None
+    with _asr_wait_lock:
+        if not _asr_wait_queue:
+            return
+        body = _asr_wait_queue.popleft()
+    if body is None:
+        return
+    if not _asr_job_sem.acquire(blocking=False):
+        with _asr_wait_lock:
+            _asr_wait_queue.appendleft(body)
+        return
+    loop = asyncio.get_running_loop()
+    rid = f"asr-q-{int(time.time() * 1000)}"
+    _server_health.latency.begin(rid, "arrive")
+    _server_health.latency.mark(rid, "dequeued")
+    audio_chunk = body
+
+    async def _bg_queued() -> None:
+        runner = _build_asr_runner(audio_chunk)
+        try:
+            intent = await loop.run_in_executor(_asr_executor, runner)
+            _push_voice_intent(intent)
+            _server_health.latency.finish(rid, "bg_done")
+        except Exception as e:
+            _server_health.set_error(f"asr_bg:{e}")
+        finally:
+            _asr_job_sem.release()
+            await _asr_schedule_next_from_queue()
+
+    asyncio.create_task(_bg_queued())
+
+
+def _get_latest_frame_bytes() -> Optional[bytes]:
+    frame_b, _ = stream_manager.get_latest_frame()
+    if not frame_b or not stream_manager.has_recent_frame():
+        return None
+    return frame_b
+
+
+def _get_latest_viewer_frame_bytes() -> Optional[bytes]:
+    """給前端顯示的影像：優先 annotated，否則 fallback raw（VIEWER_PREFER_RAW=1 時只推原圖以降低延遲）。"""
+    if bool(getattr(config, "VIEWER_PREFER_RAW", False)):
+        return _get_latest_frame_bytes()
+    try:
+        annotated = _vision_controller.get_latest_annotated_frame_bytes()
+        if annotated:
+            return annotated
+    except Exception as e:
+        _log_exception("viewer_frame", e)
+    return _get_latest_frame_bytes()
 
 
 def _is_recursive_esp32_stream_proxy(upstream: str, request_host: str) -> bool:
@@ -291,109 +386,6 @@ _STREAM_CACHE_MJPEG_INTERVAL_SEC = max(
 )
 
 
-def _should_record_esp32_ip_from_request(request: Request) -> bool:
-    return request.url.path in _ESP32_IP_FROM_REQUEST_PATHS
-
-
-def _record_esp32_ip_from_request(request: Request) -> None:
-    """從請求來源 IP 記錄 ESP32，並啟動串流拉取。"""
-    client = request.client
-    if client:
-        host = client.host
-        stream_manager.set_esp32_ip(host)
-        # 診斷：終端機若從未出現此行，代表眼鏡沒打到這台伺服器（或 IP 被記成 127.0.0.1）
-        if host not in ("127.0.0.1", "::1") and request.url.path in (
-            "/api/imu",
-            "/api/gps",
-            "/api/asr",
-        ):
-            print(f"[ESP32] 已記錄裝置 {host} ← {request.method} {request.url.path}，開始嘗試拉 MJPEG")
-
-
-def _build_asr_runner(audio_body: bytes):
-    """回傳可在 executor 中執行的同步 callable（將 bytes 綁定）。"""
-
-    def _run() -> str:
-        return handle_asr_and_route(
-            audio_body,
-            tts_enqueue_fn=tts_enqueue,
-            get_last_gps_fn=_get_last_gps,
-            request_scene_desc_fn=lambda: _request_scene_desc("general"),
-            request_traffic_light_fn=lambda: get_controller().start(),
-            start_nav_fn=lambda: start_navigation_to_home(
-                tts_enqueue, _get_last_gps, config.LAST_GPS_MAX_AGE_SEC
-            ),
-            stop_nav_fn=lambda: stop_navigation(tts_enqueue),
-            start_item_search_fn=lambda target: _start_item_search(target or ""),
-            stop_item_search_fn=_stop_item_search,
-            on_distress_fn=_handle_voice_distress,
-            max_gps_age_sec=config.LAST_GPS_MAX_AGE_SEC,
-        )
-
-    return _run
-
-
-async def _asr_schedule_next_from_queue() -> None:
-    """當 ASR 槽位釋放後，嘗試處理佇列中下一筆。"""
-    body: Optional[bytes] = None
-    with _asr_wait_lock:
-        if not _asr_wait_queue:
-            return
-        body = _asr_wait_queue.popleft()
-    if body is None:
-        return
-    if not _asr_job_sem.acquire(blocking=False):
-        with _asr_wait_lock:
-            _asr_wait_queue.appendleft(body)
-        return
-    loop = asyncio.get_running_loop()
-    import uuid
-
-    rid = f"asr-q-{uuid.uuid4().hex[:8]}"
-    _server_health.latency.begin(rid, "arrive")
-    _server_health.latency.mark(rid, "dequeued")
-    audio_chunk = body
-
-    async def _bg_queued() -> None:
-        runner = _build_asr_runner(audio_chunk)
-        try:
-            intent = await loop.run_in_executor(_asr_executor, runner)
-            _push_voice_intent(intent)
-            _server_health.latency.finish(rid, "bg_done")
-        except Exception as e:
-            _server_health.set_error(f"asr_bg:{e}")
-        finally:
-            _asr_job_sem.release()
-            await _asr_schedule_next_from_queue()
-
-    asyncio.create_task(_bg_queued())
-
-
-def _push_voice_intent(text: str) -> None:
-    with _voice_lock:
-        _recent_voice_intents.append({"ts": str(time.time()), "text": text})
-        if len(_recent_voice_intents) > 20:
-            del _recent_voice_intents[:-20]
-
-
-def _get_latest_frame_bytes() -> Optional[bytes]:
-    frame_b, _ = stream_manager.get_latest_frame()
-    if not frame_b or not stream_manager.has_recent_frame():
-        return None
-    return frame_b
-
-
-def _get_latest_viewer_frame_bytes() -> Optional[bytes]:
-    """給前端顯示的影像：優先 annotated，否則 fallback raw。"""
-    try:
-        annotated = _vision_controller.get_latest_annotated_frame_bytes()
-        if annotated:
-            return annotated
-    except Exception:
-        pass
-    return _get_latest_frame_bytes()
-
-
 def _request_scene_desc(mode: str = "general") -> None:
     frame_b = _get_latest_frame_bytes()
     if not frame_b:
@@ -403,34 +395,28 @@ def _request_scene_desc(mode: str = "general") -> None:
     tts_enqueue(text)
 
 
-def _notify_family_event(text: str, event_type: str = "emergency") -> None:
+def _notify_family_text(text: str) -> None:
+    try:
+        _line_notifier.push_text(text)
+    except Exception as e:
+        _log_exception("line_notify_text", e)
+
+
+def _notify_family_location() -> None:
     gps = _event_engine.get_snapshot().get("last_gps") or {}
     lat = gps.get("lat")
     lng = gps.get("lng")
-    
-    if event_type == "fall":
-        title = "家人智慧眼鏡：疑似跌倒定位"
-        address = "請點擊此處查看家人的即時地圖位置與導航。"
-    else:
-        title = "家人智慧眼鏡：緊急求助定位"
-        address = "請點擊此處查看家人的即時地圖位置與導航。"
-
-    if lat is not None and lng is not None:
-        try:
-            _line_notifier.push_text_and_location(
-                text=text,
-                title=title,
-                address=address,
-                lat=float(lat),
-                lng=float(lng),
-            )
-        except Exception:
-            pass
-    else:
-        try:
-            _line_notifier.push_text(text)
-        except Exception:
-            pass
+    if lat is None or lng is None:
+        return
+    try:
+        _line_notifier.push_location(
+            title="眼鏡目前位置",
+            address=gps.get("map_url") or "Google Maps",
+            lat=float(lat),
+            lng=float(lng),
+        )
+    except Exception as e:
+        _log_exception("line_notify_location", e)
 
 
 def _build_family_status_text() -> str:
@@ -473,7 +459,8 @@ def _handle_voice_distress() -> None:
         msg = "【語音緊急】使用者透過眼鏡表達需要協助，請儘速聯繫確認安全。"
         if note:
             msg += f"\n（語音轉寫：{note[:120]}{'…' if len(note) > 120 else ''}）"
-        _notify_family_event(text=msg, event_type="emergency")
+        _notify_family_text(msg)
+        _notify_family_location()
     tts_enqueue("我已嘗試通知您的家屬，請留在相對安全處並保持通訊。")
 
 
@@ -516,6 +503,7 @@ def _yolo_worker() -> None:
             time.sleep(0.5)
             continue
         frame_b = _get_latest_frame_bytes()
+        had_frame = bool(frame_b)
         if frame_b:
             try:
                 arr = np.frombuffer(frame_b, dtype=np.uint8)
@@ -527,8 +515,9 @@ def _yolo_worker() -> None:
                     with _obstacle_lock:
                         _latest_obstacle_text = text
             except Exception:
-                pass
-        time.sleep(_yolo_interval_sec)
+                print("[WARN][yolo] inference failed once")
+        # 有畫面時依 YOLO_INTERVAL 節流；無畫面時短睡，避免空轉又降低「有串流後」的首幀延遲
+        time.sleep(_yolo_interval_sec if had_frame else 0.02)
     _yolo_stop.clear()
 
 
@@ -558,8 +547,8 @@ def _nav_worker() -> None:
             elif c_state == "idle" and s in (NavState.NAVIGATING, NavState.REROUTING):
                 # 視覺模式名稱對齊：讓監控 UI 看起來像在走盲道導航
                 nav_session.set_state(NavState.BLINDPATH_NAV if nav_session.get_steps() else NavState.IDLE)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_exception("nav_worker", e)
         time.sleep(min(_nav_interval_sec, _crossing_interval_sec))
     _nav_stop.clear()
 
@@ -597,8 +586,8 @@ def _vision_worker() -> None:
             if frame_b:
                 _vision_controller.tick(frame_b)
 
-        except Exception:
-            pass
+        except Exception as e:
+            _log_exception("vision_worker", e)
 
         if _VISION_DRIVE_ENABLED:
             time.sleep(min(_nav_interval_sec, _crossing_interval_sec))
@@ -607,39 +596,13 @@ def _vision_worker() -> None:
     _vision_stop.clear()
 
 
-class _QuietMonitorFrameAccessLogFilter(logging.Filter):
-    """略過監控頁輪詢 /api/monitor/frame 的 204／304，避免洗版 uvicorn access log。"""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:
-            return True
-        if "/api/monitor/frame" not in msg:
-            return True
-        if " 204" in msg or " 304" in msg:
-            return False
-        return True
-
-
-_monitor_frame_access_filter_installed = False
-
-
-def _install_quiet_access_logging() -> None:
-    global _monitor_frame_access_filter_installed
-    if _monitor_frame_access_filter_installed:
-        return
-    logging.getLogger("uvicorn.access").addFilter(_QuietMonitorFrameAccessLogFilter())
-    _monitor_frame_access_filter_installed = True
-
-
 def _monitor_state() -> Dict[str, object]:
     nav_session = get_nav_session()
     fusion = get_fusion()
     crossing = get_controller()
     with _voice_lock:
         recent_voice = list(_recent_voice_intents[-5:])
-    
+
     # Vision overlay detector summary. This matches the model used to draw boxes
     # on /monitor, /ws/viewer, and /api/monitor/frame.
     try:
@@ -675,6 +638,32 @@ def _monitor_events(limit: int) -> List[Dict[str, object]]:
     return get_nav_session().get_recent_events(limit=limit)
 
 
+class _QuietMonitorFrameAccessLogFilter(logging.Filter):
+    """略過監控頁輪詢 /api/monitor/frame 的 204／304，避免洗版 uvicorn access log。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        if "/api/monitor/frame" not in msg:
+            return True
+        if " 204" in msg or " 304" in msg:
+            return False
+        return True
+
+
+_monitor_frame_access_filter_installed = False
+
+
+def _install_quiet_access_logging() -> None:
+    global _monitor_frame_access_filter_installed
+    if _monitor_frame_access_filter_installed:
+        return
+    logging.getLogger("uvicorn.access").addFilter(_QuietMonitorFrameAccessLogFilter())
+    _monitor_frame_access_filter_installed = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _validate_startup_config()
@@ -690,18 +679,6 @@ async def lifespan(app: FastAPI):
     if esp32_stream_url and not stream_manager.get_esp32_ip():
         stream_manager.set_esp32_ip("esp32-stream-url")
 
-    # ASR 預載（降低第一次辨識延遲）
-    if getattr(config, "ASR_WHISPER_WARMUP", True):
-        def _warm_whisper() -> None:
-            try:
-                from local_whisper_asr import warmup_whisper
-                warmup_whisper()
-                print("[ASR] Whisper warmup finished.")
-            except Exception as e:
-                print(f"[ASR] Whisper warmup skipped: {e}")
-
-        threading.Thread(target=_warm_whisper, daemon=True).start()
-
     yolo_thread = threading.Thread(target=_yolo_worker, daemon=True)
     nav_thread = threading.Thread(target=_nav_worker, daemon=True)
     vision_thread = threading.Thread(target=_vision_worker, daemon=True)
@@ -710,8 +687,24 @@ async def lifespan(app: FastAPI):
         nav_thread.start()
     vision_thread.start()
     print(
-        "[提示] 陀螺儀三軸／加速度是 HTTP POST /api/imu，不是 UDP；UDP 只有「找伺服器」(WHO_IS_SERVER)。"
+        "[提示] 陀螺儀三軸／加速度三軸是 HTTP POST /api/imu（六軸），不是 UDP；UDP 只有「找伺服器」(WHO_IS_SERVER)。"
         " 若日誌僅 127.0.0.1，代表眼鏡封包未到本機。除錯探索請在 server/.env 設 UDP_RECV_LOG=1 後重啟。"
+    )
+    if getattr(config, "ASR_WHISPER_WARMUP", True):
+
+        def _warm_whisper() -> None:
+            try:
+                from local_whisper_asr import warmup_whisper
+
+                warmup_whisper()
+                print("[ASR] Whisper warmup finished.")
+            except Exception as e:
+                print(f"[ASR] Whisper warmup skipped: {e}")
+
+        threading.Thread(target=_warm_whisper, daemon=True).start()
+    print(
+        "[提示] 關閉時若出現 Waiting for connections：先關閉正在看 /stream 的瀏覽器分頁，"
+        "或再按一次 Ctrl+C 強制結束。"
     )
     yield
     stream_manager.shutdown_for_exit()
@@ -731,6 +724,10 @@ app.include_router(
         _monitor_events,
         _get_latest_viewer_frame_bytes,
         get_health_fn=lambda: _server_health.snapshot(),
+        get_latency_fn=lambda: {
+            "stats": _server_health.latency.stats(),
+            "recent": _server_health.latency.recent(20),
+        },
     )
 )
 
@@ -892,7 +889,7 @@ async def ws_viewer(ws: WebSocket):
             if frame_b and frame_b is not last_sent_frame:
                 await ws.send_bytes(frame_b)
                 last_sent_frame = frame_b
-            # 預設約 20fps，降低 CPU/頻寬占用
+            # 預設約 20fps，降低 CPU/頻寬占用，讓 API 回應更穩。
             await asyncio.sleep(_viewer_ws_interval_sec)
     except WebSocketDisconnect:
         pass
@@ -962,23 +959,17 @@ async def api_gemini(request: Request) -> dict:
     依目前最新影格做 Gemini 場景分析，並將描述文字送入 TTS 佇列。
     ESP32 按鍵觸發 POST 即可。
     """
-    import uuid
-
-    rid = f"gemini-{uuid.uuid4().hex[:8]}"
+    import uuid as _uuid
+    rid = f"gemini-{_uuid.uuid4().hex[:8]}"
     _server_health.latency.begin(rid, "arrive")
 
     frame_b = _get_latest_frame_bytes()
     if not frame_b:
-        return {"ok": False, "error": "no_frame"}
-
+        return _api_error("no_frame", 404)
     if not _gemini_job_sem.acquire(blocking=False):
         _server_health.set_error("gemini:server_busy")
         lat = _server_health.latency.finish(rid, "rejected")
-        return JSONResponse(
-            {"ok": False, "error": "server_busy", "latency_ms": lat},
-            status_code=503,
-        )
-
+        return JSONResponse({"ok": False, "error": "server_busy", "latency_ms": lat}, status_code=503)
     mode = request.query_params.get("mode", "general")
     _server_health.latency.mark(rid, "pre_inference")
     loop = asyncio.get_running_loop()
@@ -1000,11 +991,10 @@ async def audio_latest(request: Request):
     """回傳最新 TTS 產生的語音檔（edge-tts 輸出），供 ESP32 下載播放。"""
     path = tts_latest_path()
     if not path:
-        return JSONResponse({"error": "no_audio"}, status_code=404)
+        return _api_error("no_audio", 404)
     path = os.path.abspath(path)
     if not os.path.exists(path):
-        return JSONResponse({"error": "no_audio"}, status_code=404)
-
+        return _api_error("no_audio", 404)
     seq = tts_current_seq()
     etag = f'"{seq}"'
     inm = request.headers.get("if-none-match")
@@ -1031,9 +1021,8 @@ async def api_asr(request: Request) -> dict:
     - 多意圖分類
     - 路由到導航/停止/場景描述/找物品/紅綠燈流程
     """
-    import uuid
-
-    rid = f"asr-{uuid.uuid4().hex[:8]}"
+    import uuid as _uuid
+    rid = f"asr-{_uuid.uuid4().hex[:8]}"
     _server_health.latency.begin(rid, "arrive")
 
     body = await request.body()
@@ -1097,13 +1086,7 @@ async def api_asr(request: Request) -> dict:
         _server_health.latency.mark(rid, "intent_done")
         _push_voice_intent(intent)
         lat = _server_health.latency.finish(rid, "response")
-        return {
-            "ok": True,
-            "intent": intent,
-            "accepted": False,
-            "queued": False,
-            "latency_ms": lat,
-        }
+        return {"ok": True, "intent": intent, "accepted": False, "queued": False, "latency_ms": lat}
     finally:
         _asr_job_sem.release()
 
@@ -1123,42 +1106,22 @@ async def api_imu(request: Request) -> dict:
     """ESP32 上傳 IMU 資料。"""
     try:
         data = await request.json()
+    except Exception as e:
+        _server_health.set_error(f"imu:invalid_json:{e}")
+        return _api_error("invalid_json", 400)
+    try:
         get_fusion().update_imu(data)
         _server_health.touch_imu()
         ev = _event_engine.update_imu(data)
         notify_event = ev.get("notify_event")
         if notify_event and _event_engine.should_send_line():
-            _notify_family_event(
-                text=str(notify_event.get("text") or "警示：偵測到異常事件。"),
-                event_type="fall"
-            )
+            _notify_family_text(str(notify_event.get("text") or "警示：偵測到異常事件。"))
+            _notify_family_location()
     except Exception as e:
         _server_health.set_error(f"imu:{e}")
-        pass
+        _log_exception("api_imu", e)
+        return _api_error("imu_processing_failed", 500)
     return {"ok": True}
-
-
-_current_device_status: dict = {}
-
-@app.post("/api/status")
-async def api_post_status(request: Request) -> dict:
-    """接收來自配戴者 App 轉發的藍牙設備狀態。"""
-    global _current_device_status
-    try:
-        _current_device_status = await request.json()
-    except Exception:
-        pass
-    return {"status": "success"}
-
-@app.get("/api/status")
-async def api_get_status() -> dict:
-    """提供家屬端 App 取得最新設備狀態與 GPS。"""
-    resp = dict(_current_device_status)
-    # 把伺服器接收到的最新 ESP32 GPS 一併塞進去回傳
-    with _gps_lock:
-        if _last_gps:
-            resp["gps"] = _last_gps
-    return resp
 
 
 def _update_last_gps(
@@ -1188,19 +1151,25 @@ async def api_gps(request: Request) -> dict:
     """ESP32 上傳 GPS 資料；儲存為導航起點並更新 IMU/GPS 融合。"""
     try:
         data = await request.json()
+    except Exception as e:
+        _server_health.set_error(f"gps:invalid_json:{e}")
+        return _api_error("invalid_json", 400)
+    try:
         lat = data.get("lat")
         lng = data.get("lng")
-        if lat is not None and lng is not None:
-            latf = float(lat)
-            lngf = float(lng)
-            course = data.get("course")
-            _update_last_gps(latf, lngf, data.get("alt"), data.get("sat"), course)
-            get_fusion().update_gps(latf, lngf, course=course)
-            _event_engine.update_gps(data)
-            _server_health.touch_gps()
+        if lat is None or lng is None:
+            return _api_error("missing_lat_lng", 400)
+        latf = float(lat)
+        lngf = float(lng)
+        course = data.get("course")
+        _update_last_gps(latf, lngf, data.get("alt"), data.get("sat"), course)
+        get_fusion().update_gps(latf, lngf, course=course)
+        _event_engine.update_gps(data)
+        _server_health.touch_gps()
     except Exception as e:
         _server_health.set_error(f"gps:{e}")
-        pass
+        _log_exception("api_gps", e)
+        return _api_error("gps_processing_failed", 500)
     return {"ok": True}
 
 
@@ -1230,18 +1199,80 @@ async def api_family_emergency(request: Request) -> dict:
     try:
         body = await request.json()
         note = str(body.get("note") or "")
-    except Exception:
-        pass
+    except Exception as e:
+        _log_exception("api_family_emergency", e)
+        return _api_error("invalid_json", 400)
     ev = _event_engine.emergency_event(note)
     sent = False
     if _event_engine.should_send_line():
-        _notify_family_event(
-            text=str(ev.get("text") or "緊急通知：眼鏡端觸發緊急求助。"),
-            event_type="emergency"
-        )
+        _notify_family_text(str(ev.get("text") or "緊急通知"))
+        _notify_family_location()
         sent = True
     return {"ok": True, "sent": sent, "event": ev}
 
+
+@app.post("/api/line/webhook")
+async def api_line_webhook(request: Request):
+    """
+    LINE webhook：
+    - 快捷：位置 / 狀態 / 緊急（家屬手動通報，與眼鏡語音求救分開）
+    - 其餘文字：Gemini 家屬助理（無 key 時 fallback 提示）
+    """
+    body = await request.body()
+    sig = request.headers.get("X-Line-Signature", "")
+    secret = (getattr(config, "LINE_CHANNEL_SECRET", "") or "").strip()
+    if secret:
+        mac = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+        expected = base64.b64encode(mac).decode("utf-8")
+        if not hmac.compare_digest(expected, sig):
+            return _api_error("invalid_signature", 401)
+
+    try:
+        payload = await request.json()
+    except Exception as e:
+        _log_exception("line_webhook_json", e)
+        return _api_error("invalid_json", 400)
+
+    events = payload.get("events") or []
+    loop = asyncio.get_running_loop()
+    for ev in events:
+        if ev.get("type") != "message":
+            continue
+        message = ev.get("message") or {}
+        if message.get("type") != "text":
+            continue
+        raw_text = str(message.get("text") or "").strip()
+        text = raw_text.lower()
+        reply_token = str(ev.get("replyToken") or "")
+        if not reply_token:
+            continue
+        if text in ("位置", "定位", "where", "location"):
+            _line_notifier.reply_text(reply_token, _build_family_location_text())
+        elif text in ("狀態", "status"):
+            _line_notifier.reply_text(reply_token, _build_family_status_text())
+        elif text in ("緊急", "emergency", "sos"):
+            _event_engine.emergency_event("line_manual")
+            if _event_engine.should_send_line():
+                _notify_family_text("【家屬手動緊急】有人於 LINE 觸發緊急通報，請確認是否誤觸並聯繫使用者。")
+                _notify_family_location()
+            _line_notifier.reply_text(
+                reply_token,
+                "已送出「家屬手動」緊急通報（與眼鏡語音求救不同）。若為誤觸請向家屬說明。",
+            )
+        else:
+            ctx = _line_gemini_context()
+            ai = await loop.run_in_executor(
+                _line_ai_executor,
+                lambda r=raw_text, c=ctx: family_line_reply(r, c),
+            )
+            out = (ai or "").strip()
+            if not out:
+                out = (
+                    "我暫時無法使用 AI 回覆。請用下方快捷鍵：「位置」「狀態」；"
+                    "「緊急通報」僅供家屬手動送出警訊。"
+                )
+            _line_notifier.reply_text(reply_token, out)
+    return {"ok": True}
 
 
 @app.post("/api/gpio_test")
@@ -1253,7 +1284,8 @@ async def api_gpio_test(request: Request) -> dict:
     """
     try:
         data = await request.json()
-    except Exception:
+    except Exception as e:
+        _log_exception("api_gpio_test", e)
         data = {}
     ok = bool(data.get("ok"))
     client = request.client.host if request.client else "unknown"
@@ -1269,4 +1301,6 @@ if __name__ == "__main__":
         host=config.HTTP_HOST,
         port=config.HTTP_PORT,
         reload=False,
+        log_level="warning",
+        access_log=False,
     )

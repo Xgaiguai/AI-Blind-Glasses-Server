@@ -1,3 +1,7 @@
+# 建議：Python 3.11–3.14，並使用專案內 `python -m venv .venv` 後再安裝。
+# 驗證：`pip install -r requirements.txt` → `pip check` → `python -c "import main"`（於 server/ 目錄）。
+# Ultralytics 若頻繁打 GitHub API，可設環境變數 GITHUB_TOKEN 降低 rate limit 警告。
+
 fastapi>=0.109.0
 python-dotenv>=1.0.0
 uvicorn[standard]>=0.27.0
